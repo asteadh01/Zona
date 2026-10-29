@@ -1,0 +1,112 @@
+# Zona on the home k3s cluster, following ObsidianVault/shared/patterns/deploy-blueprint.
+#
+# Before the first apply:
+#   1. Replace OWNER in the image with your GHCR namespace and push an image. The deploy step should
+#      `kubectl set image` to the exact commit SHA, as in the blueprint, rather than run :latest.
+#   2. Create the secret by hand (never commit it):
+#        kubectl -n zona create secret generic zona-secrets \
+#          --from-literal=GARMIN_PERSONAL_API_KEY=... --from-literal=ZONA_PASSWORD=... \
+#          --from-literal=ZONA_SESSION_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
+#          --from-literal=ZONA_VAPID_PRIVATE_KEY=... --from-literal=ZONA_VAPID_PUBLIC_KEY=... \
+#          --from-literal=ZONA_VAPID_SUBJECT=mailto:<an address of yours, sent only to the push services>
+#      ZONA_PASSWORD needs 12+ characters; Zona refuses to start with the .env.example placeholders.
+#   3. Point a Cloudflare Tunnel hostname (e.g. zona.steaddev.cl) at http://zona.zona.svc.cluster.local:80.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zona
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zona-data
+  namespace: zona
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zona
+  namespace: zona
+  labels:
+    app: zona
+spec:
+  # Exactly one: SQLite on a ReadWriteOnce volume, and one sync loop so nudges go out once.
+  replicas: 1
+  revisionHistoryLimit: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: zona
+  template:
+    metadata:
+      labels:
+        app: zona
+    spec:
+      automountServiceAccountToken: false  # Zona never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: zona
+          image: ghcr.io/OWNER/zona:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: zona-secrets
+          env:
+            - name: ZONA_TZ
+              value: America/Santiago
+            - name: ZONA_SECURE_COOKIES
+              value: "1"
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: zona-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zona
+  namespace: zona
+spec:
+  selector:
+    app: zona
+  ports:
+    - port: 80
+      targetPort: 8000
