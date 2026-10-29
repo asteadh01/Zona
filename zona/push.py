@@ -15,7 +15,7 @@ from pywebpush import WebPushException, webpush
 from urllib3.exceptions import LocationParseError
 from urllib3.util import parse_url
 
-from .db import Repo
+from .db import Store
 
 log = logging.getLogger(__name__)
 PUSH_TTL_S = 3600
@@ -65,7 +65,7 @@ def push_keys_ok(p256dh: str, auth: str) -> bool:
 
 
 class Pusher:
-    def __init__(self, repo: Repo, private_key: str | None, public_key: str | None, subject: str) -> None:
+    def __init__(self, repo: Store, private_key: str | None, public_key: str | None, subject: str) -> None:
         self.repo, self.private_key, self.public_key, self.subject = repo, private_key, public_key, subject
         self._session = requests.Session()
         self._session.max_redirects = 0  # a push service never redirects; following one would undo the host check

@@ -6,6 +6,7 @@ Run locally:  uvicorn zona.main:app --env-file .env
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -15,14 +16,14 @@ from pathlib import Path as FsPath
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import auth, fake, shapes
 from .config import Config, load_config
-from .db import Repo
+from .db import Repo, Store
 from .garmin import GarminSource, LiveGarmin
 from .push import Pusher, push_endpoint_ok, push_keys_ok
 from .service import Service
@@ -99,15 +100,28 @@ def require_session(request: Request) -> None:
 
 
 def client_id(request: Request) -> str:
-    # Behind the Cloudflare Tunnel every request comes from cloudflared; Cloudflare sets the real client here.
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "unknown")
+    """Who is logging in. Firebase Hosting and Cloud Run put the client first in X-Forwarded-For. A client can
+    forge that, which only buys more attempts under a new name; LoginLimiter's global slowdown caps those."""
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return request.headers.get("cf-connecting-ip") or forwarded or (request.client.host if request.client else "unknown")
+
+
+def same_origin(request: Request, allowed: tuple[str, ...]) -> bool:
+    """A write is ours if its Origin is this host, the host Firebase Hosting forwarded for (Cloud Run itself sees
+    *.run.app), or one of the app's configured addresses. A cross-site page can't set X-Forwarded-Host without a
+    CORS preflight, which Zona never answers, so trusting it here is safe."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return True  # same-origin GETs and non-browser clients; the SameSite=Lax cookie covers browsers
+    host = urlparse(origin).netloc
+    return host in {request.headers.get("host"), request.headers.get("x-forwarded-host")} or origin in allowed
 
 
 # Module level on purpose: with postponed annotations FastAPI resolves this name from the module globals.
 Authed = Annotated[None, Depends(require_session)]
 
 
-def seed_fake_plan(repo: Repo) -> None:
+def seed_fake_plan(repo: Store) -> None:
     if repo.plan():
         return
     for weekday, sessions in fake.WEEK.items():
@@ -119,7 +133,12 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
                clock: Callable[[], datetime] | None = None, pusher: Any = None, run_loop: bool | None = None) -> FastAPI:
     cfg = config or load_config()
     now: Callable[[], datetime] = clock or (lambda: datetime.now(cfg.tz))
-    repo = Repo(cfg.db_path, cfg.tz)
+    repo: Store
+    if cfg.store == "firestore":
+        from .firestore_store import FirestoreStore  # imported only here: the SQLite path never loads gRPC
+        repo = FirestoreStore(cfg.tz)
+    else:
+        repo = Repo(cfg.db_path, cfg.tz)
     garmin: GarminSource = source or (fake.FakeGarmin(cfg.tz, now) if cfg.fake else LiveGarmin(cfg.garmin_api_key or "", cfg.token_cache))
     service = Service(repo, cfg.tz, now)
     push = pusher or Pusher(repo, cfg.vapid_private_key, cfg.vapid_public_key, cfg.vapid_subject)
@@ -155,8 +174,7 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         is_api = request.url.path.startswith("/api/")
         if request.method not in ("GET", "HEAD", "OPTIONS") and is_api:
             # Same-origin writes only. The cookie is SameSite=Lax too; this also covers same-site subdomains.
-            origin = request.headers.get("origin")
-            if origin and urlparse(origin).netloc != request.headers.get("host"):
+            if not same_origin(request, cfg.origins):
                 return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
             # Refuse big bodies before anything reads them: FastAPI parses the body before the auth check runs.
             length = request.headers.get("content-length")
@@ -183,6 +201,7 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         client = client_id(request)
         if not limiter.begin(client):
             raise HTTPException(429, "Too many wrong passwords. Try again in 15 minutes.")
+        time.sleep(limiter.global_delay_s())  # many recent failures from anywhere: slow every guess, block no one
         if not auth.password_ok(body.password, cfg.password):
             raise HTTPException(401, "Wrong password")
         limiter.succeeded(client)
@@ -281,16 +300,22 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         return {"ok": True, "devices": len(repo.subs())}
 
     @app.post("/api/push/test")
-    def push_test(_: Authed, background: BackgroundTasks, delay: Annotated[int, Query(ge=0, le=30)] = 0) -> dict:
-        """delay lets you lock the phone first: Garmin mirrors notifications to the watch while the phone is locked."""
-        def send() -> int:
-            time.sleep(delay)
-            return push.send("Zona is set up", "Nudges and reminders will show up like this.", url="/", tag="test")
+    def push_test(_: Authed, delay: Annotated[int, Query(ge=0, le=30)] = 0) -> dict:
+        """delay lets you lock the phone first: Garmin mirrors notifications to the watch while the phone is locked.
+        The wait happens inside the request on purpose: Cloud Run only gives a container CPU while a request is open,
+        so work left for after the response might never run. The push goes out even if the phone stops listening."""
+        time.sleep(delay)
+        return {"sent": push.send("Zona is set up", "Nudges and reminders will show up like this.", url="/", tag="test")}
 
-        if delay:
-            background.add_task(send)  # runs after the response, so the request doesn't hang while you lock the phone
-            return {"sent": None, "devices": len(repo.subs()), "in_seconds": delay}
-        return {"sent": send()}
+    @app.post("/internal/tick")
+    async def tick(request: Request) -> dict:
+        """Cloud Scheduler calls this every 5 minutes; it replaces the in-process loop on Cloud Run. Not under /api/,
+        so Firebase Hosting doesn't route it: only the run.app URL reaches it, and only with the shared secret."""
+        given = request.headers.get("x-zona-tick", "")
+        if not cfg.tick_secret or not hmac.compare_digest(given.encode(), cfg.tick_secret.encode()):
+            raise HTTPException(403, "Forbidden")
+        await asyncio.to_thread(syncer.tick)
+        return {"ok": True, "sync": service.sync_status()["status"]}
 
     @app.get("/api/garmin-shapes", response_class=PlainTextResponse)
     def garmin_shapes(_: Authed) -> str:

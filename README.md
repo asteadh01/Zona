@@ -2,9 +2,23 @@
 
 A personal sports dashboard for one iPhone, fed by Garmin's Personal API. It shows when and how much you train, what you burn, how you slept, and a daily call from your Body Battery ("Go ahead with your run" … "Maybe stay in and rest a bit"). The water goal starts at a base and rises as each workout syncs, and you get a drink nudge after every session.
 
-It's a home-screen web app (PWA) served by a small FastAPI server, which holds the Garmin key, pulls on a schedule, stores everything in SQLite and sends web push.
+It's a home-screen web app (PWA) on Firebase Hosting. A small FastAPI server on Cloud Run holds the Garmin key and stores everything in Firestore. Cloud Scheduler wakes it every 5 minutes to pull from Garmin and send web push.
 
 Design sketch and decisions: <https://claude.ai/artifact/MmNXJopb7NW6r5RFYVZLJN>. Knowledge base: `ObsidianVault/projects/Zona/`.
+
+## Put it on your phone
+
+**[docs/PHONE_SETUP.md](docs/PHONE_SETUP.md)** walks through every step, from the Firebase project to the watch buzzing. After setup, a release is one command:
+
+```bash
+.venv/Scripts/python.exe scripts/zona_cloud.py deploy --project YOUR-PROJECT-ID
+```
+
+It runs on Firebase's Blaze plan, and one person's use stays inside Blaze's free allowances:
+- **Cloud Run:** at most one instance, and it sleeps between requests.
+- **Firestore:** only changed activities are written, and no query needs an index.
+- **Secret Manager:** one secret holds everything.
+- **Artifact Registry:** keeps the last two images.
 
 ## Run it locally on sample data
 
@@ -15,47 +29,34 @@ cp .env.example .env            # then set ZONA_PASSWORD (12+ chars) and ZONA_SE
 .venv/Scripts/python.exe -m uvicorn zona.main:app --env-file .env --port 8000
 ```
 
-Open <http://localhost:8000> and sign in. With `ZONA_FAKE=1`, the app runs on generated history in Garmin's JSON shapes, and the Water tab has a button that finishes a 47-minute run, so you can watch the goal rise and the nudge arrive.
+Open <http://localhost:8000> and sign in. With `ZONA_FAKE=1`, the app runs on generated history in Garmin's JSON shapes, and the Water tab has a button that finishes a 47-minute run, so you can watch the goal rise and the nudge arrive. Local runs use SQLite and the in-process sync loop; set `ZONA_STORE=firestore` to use Firestore instead.
+
+## Tests
 
 ```bash
-.venv/Scripts/python.exe -m pytest     # rules, Garmin mapping, sync and nudges, API and auth
+.venv/Scripts/python.exe -m pytest
 ```
 
-## Connect your Garmin account
+That runs everything on SQLite and skips the Firestore half. To run every storage, sync and API test against Firestore too, run it under the emulator. It needs Java and the Firebase CLI; this is what CI runs:
 
-1. On the web, open Garmin Connect › Settings › Personal API Key. Create a key, ideally lasting a year. Garmin shows it once.
-2. Put it in `GARMIN_PERSONAL_API_KEY` and set `ZONA_FAKE=0`.
-3. Run `python -m zona inspect`. It prints the shape of each response Zona reads: field names and types, not your values. Garmin publishes paths but not response schemas, so check them against `zona/normalize.py`. Raw payloads are also saved in the `raw` table.
+```bash
+firebase emulators:exec --only firestore --project demo-zona "C:/Users/astea/Desktop/Workspace/Zona/.venv/Scripts/python.exe -m pytest"
+```
 
-The first sync backfills 180 days of activities and 12 weeks of daily data, in chunks that respect Garmin's per-call date caps. After that, Zona checks every 5 minutes for 3 hours after a planned session starts and every 30 minutes otherwise, or every 15 minutes all day if you pick that.
+## Garmin data
 
-## Notifications on the iPhone
+Garmin publishes the Personal API's paths but not its response schemas. To check `zona/normalize.py` against real data, open **Train › Zona › Garmin data shapes** in the app. It shows field names and types, never values. With the key in your shell, `python -m zona inspect` prints the same.
 
-1. Generate keys once with `python -m zona vapid` and put them in `ZONA_VAPID_PRIVATE_KEY` and `ZONA_VAPID_PUBLIC_KEY`.
-2. Serve Zona over https (the tunnel does that).
-3. In Safari, Share › Add to Home Screen, then open Zona from the icon.
-4. In Train, under Zona, tap Turn on notifications.
+The first sync backfills 180 days of activities and 12 weeks of daily data, in chunks that respect Garmin's per-call date caps. After that, Zona calls Garmin every 5 minutes for 3 hours after a planned session starts, and every 30 minutes otherwise, or every 15 minutes all day if you pick that. The scheduler wakes it every 5 minutes either way.
 
-iOS only allows web push for home-screen apps (16.4+). Your Garmin watch mirrors the notifications, and you can read and dismiss them there.
+## What the server guards against
 
-## Deploy (k3s + Cloudflare Tunnel)
-
-**[docs/PHONE_SETUP.md](docs/PHONE_SETUP.md)** walks through every step, from the Garmin key to the watch buzzing.
-
-In short:
-1. Push to a private GitHub repo.
-2. Add the repo secrets. `scripts/make_secrets.py` makes the app ones; the cluster ones are the same as SportCove's.
-3. Add a `zona` route to the SportCove Cloudflare tunnel.
-
-After that, `.github/workflows/deploy.yml` runs on every push to `main`: tests, an image on GHCR, a deploy over Tailscale, and a `/health` check through the tunnel, with automatic rollback.
-
-It runs one replica on purpose: SQLite lives on a ReadWriteOnce volume, and a single sync loop means each nudge goes out once.
-
-What the server already guards against:
-- **Login:** wrong passwords are limited per client IP, using `CF-Connecting-IP` behind the tunnel.
-- **Sign out:** revokes every cookie issued so far, and so does changing the password.
-- **Requests:** API bodies are capped at 64 KB before anything parses them.
+- **Login:** wrong passwords are limited per client, and past 20 recent failures from anywhere every attempt is slowed.
+- **Sessions:** signing out revokes every cookie, and so does changing the password. The cookie is named `__session`, the only name Firebase Hosting passes through to Cloud Run.
+- **Writes:** only from the app's own addresses. Behind Hosting, Cloud Run sees its `run.app` host, so the check also accepts `X-Forwarded-Host` and the `ZONA_ORIGINS` list.
+- **Requests:** API bodies are capped at 64 KB before anything parses them. `/internal/tick` needs the scheduler's secret.
 - **Push:** subscriptions are only accepted for Apple's, Google's, Mozilla's and Microsoft's push services. The host is checked with the same URL parser the push request uses, and redirects are refused.
+- **Firestore:** `firestore.rules` refuses all client access. Only the server's service account reads and writes.
 
 ## Layout
 
@@ -64,10 +65,12 @@ What the server already guards against:
 | `zona/rules.py` | the daily call, water goal, nudge decisions, polling interval (pure, fully tested) |
 | `zona/normalize.py` | Personal API JSON → `Activity` / `Day` records, tolerant of missing fields |
 | `zona/sync.py` | backfill, incremental sync, nudges (with hold-and-merge for back-to-back sessions), morning call, reminders |
+| `zona/db.py`, `zona/firestore_store.py` | the `Store`: SQLite for local runs, Firestore on Cloud Run |
 | `zona/service.py`, `zona/insights.py` | what each screen shows |
 | `zona/garmin.py`, `zona/fake.py` | the live source (Garmin's official client) and the sample-data source |
-| `zona/main.py`, `zona/auth.py` | API, one-password sign-in with a signed cookie, security headers |
+| `zona/main.py`, `zona/auth.py` | API, the scheduler tick, one-password sign-in with a signed cookie, security headers |
 | `web/` | the PWA: Home (Today · Month · Insights), Trends, Train, Water; service worker for offline and push |
+| `firebase.json`, `firestore.rules`, `Dockerfile`, `scripts/zona_cloud.py` | how it's deployed |
 
 ## Not in v1
 

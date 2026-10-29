@@ -9,11 +9,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-COOKIE = "zona_session"
+COOKIE = "__session"  # the only cookie name Firebase Hosting passes through to Cloud Run
 MAX_AGE_S = 180 * 24 * 3600  # a home-screen app shouldn't ask often
 MAX_TOKEN_LEN = 100
 MAX_FAILURES, WINDOW_S = 5, 15 * 60
 MAX_TRACKED_CLIENTS = 10_000
+GLOBAL_SLOW_AFTER, GLOBAL_DELAY_S = 20, 2.0  # across all clients: past this many recent attempts, each one waits
 
 
 def session_key(secret: bytes, password: str) -> bytes:
@@ -74,3 +75,11 @@ class LoginLimiter:
     def succeeded(self, client: str) -> None:
         with self._lock:
             self.attempts.pop(client, None)
+
+    def global_delay_s(self, now: float | None = None) -> float:
+        """A client can claim a new address on every try, so per-client limits alone don't cap guessing.
+        Past GLOBAL_SLOW_AFTER recent attempts in total, every attempt waits: guessing slows down, the owner still gets in."""
+        now = time.time() if now is None else now
+        with self._lock:
+            recent = sum(1 for times in self.attempts.values() for t in times if now - t < WINDOW_S)
+        return GLOBAL_DELAY_S if recent > GLOBAL_SLOW_AFTER else 0.0

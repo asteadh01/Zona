@@ -6,3 +6,5 @@ data/
 .env
 *.sqlite3
 *.sqlite3-*
+firestore-debug.log
+*.log

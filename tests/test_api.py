@@ -1,18 +1,25 @@
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from zona.config import load_config
-from zona.main import create_app
+from zona.main import CSP, create_app
 
 PASSWORD = "correct horse battery staple"
+TICK = "t" * 40
+BASE_ENV = {"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "s" * 40, "ZONA_FAKE": "1", "ZONA_SECURE_COOKIES": "0"}
+
+
+def make_client(tmp_path, clock, pusher, store, **env):
+    cfg = load_config({**BASE_ENV, "ZONA_DATA_DIR": str(tmp_path), "ZONA_STORE": store, **env})
+    return TestClient(create_app(cfg, clock=clock, pusher=pusher, run_loop=False), base_url="http://zona.test")
 
 
 @pytest.fixture
-def client(tmp_path, clock, pusher):
-    cfg = load_config({"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "s" * 40, "ZONA_FAKE": "1",
-                       "ZONA_DATA_DIR": str(tmp_path), "ZONA_SECURE_COOKIES": "0"})
-    app = create_app(cfg, clock=clock, pusher=pusher, run_loop=False)
-    with TestClient(app, base_url="http://zona.test") as c:
+def client(tmp_path, clock, pusher, store):
+    with make_client(tmp_path, clock, pusher, store) as c:
         yield c
 
 
@@ -38,16 +45,16 @@ def test_wrong_passwords_are_rate_limited_per_client(client):
 
 def test_sign_out_revokes_copied_cookies(client):
     login(client)
-    stolen = client.cookies.get("zona_session")
+    stolen = client.cookies.get("__session")
     assert client.post("/api/logout").status_code == 200
-    client.cookies.set("zona_session", stolen, domain="zona.test")
+    client.cookies.set("__session", stolen, domain="zona.test")
     assert client.get("/api/me").status_code == 401
 
 
 @pytest.mark.parametrize("cookie", ["", "²³.abc", "9" * 5000 + ".x", "123.ñññ", "1.2.3", "abc.def"])
 def test_malformed_cookies_get_401_not_500(client, cookie):
     # a raw header, since the test client itself refuses to encode non-ASCII cookie values
-    assert client.get("/api/me", headers={"Cookie": f"zona_session={cookie}".encode()}).status_code == 401
+    assert client.get("/api/me", headers={"Cookie": f"__session={cookie}".encode()}).status_code == 401
 
 
 def test_big_or_chunked_bodies_are_refused_before_auth(client):
@@ -141,13 +148,59 @@ def test_month_trends_and_insights(client):
     assert client.get("/api/insights").json()["enough"] is True
 
 
-def test_delayed_test_push_returns_at_once_and_sends_afterwards(client, pusher, monkeypatch):
+def test_delayed_test_push_waits_inside_the_request(client, pusher, monkeypatch):
     import zona.main
-    monkeypatch.setattr(zona.main.time, "sleep", lambda s: None)
+    waited = []
+    monkeypatch.setattr(zona.main.time, "sleep", waited.append)
     login(client)
-    assert client.post("/api/push/test", params={"delay": 10}).json()["in_seconds"] == 10
-    assert pusher.titles()[-1] == "Zona is set up"  # TestClient runs background tasks before returning
+    assert client.post("/api/push/test", params={"delay": 10}).json()["sent"] == 1
+    assert 10 in waited and pusher.titles()[-1] == "Zona is set up"  # sent before the response, not after
     assert client.post("/api/push/test", params={"delay": 300}).status_code == 422
+
+
+def test_tick_needs_the_scheduler_secret(tmp_path, clock, pusher, store):
+    with make_client(tmp_path, clock, pusher, store, ZONA_SYNC="0", ZONA_TICK_SECRET=TICK) as c:
+        assert c.post("/internal/tick").status_code == 403
+        assert c.post("/internal/tick", headers={"X-Zona-Tick": "nope"}).status_code == 403
+        r = c.post("/internal/tick", headers={"X-Zona-Tick": TICK})
+        assert r.json() == {"ok": True, "sync": "ok"}
+        login(c)
+        assert c.get("/api/home").json()["sync"]["status"] == "ok"  # the tick did the backfill
+
+
+def test_tick_is_refused_when_no_secret_is_configured(client):
+    assert client.post("/internal/tick", headers={"X-Zona-Tick": ""}).status_code == 403
+
+
+def test_writes_through_firebase_hosting_pass_the_origin_check(tmp_path, clock, pusher, store):
+    # Cloud Run sees its own run.app host; Hosting sends the original one in X-Forwarded-Host
+    with make_client(tmp_path, clock, pusher, store, ZONA_ORIGINS="https://zona-1.web.app") as c:
+        login(c)
+        hosting = {"Origin": "https://zona-9.web.app", "Host": "zona-abc-uc.a.run.app", "X-Forwarded-Host": "zona-9.web.app"}
+        assert c.post("/api/water", json={"ml": 250}, headers=hosting).status_code == 200
+        listed = {"Origin": "https://zona-1.web.app", "Host": "zona-abc-uc.a.run.app"}
+        assert c.post("/api/water", json={"ml": 250}, headers=listed).status_code == 200
+        evil = {"Origin": "https://evil.example", "Host": "zona-abc-uc.a.run.app", "X-Forwarded-Host": "zona-9.web.app"}
+        assert c.post("/api/water", json={"ml": 250}, headers=evil).status_code == 403
+
+
+def test_many_failures_from_many_addresses_slow_every_guess(client, monkeypatch):
+    import zona.main
+    waited = []
+    monkeypatch.setattr(zona.main.time, "sleep", waited.append)
+    for i in range(25):
+        client.post("/api/login", json={"password": "nope"}, headers={"X-Forwarded-For": f"203.0.113.{i}"})
+    assert waited[-1] == 2.0
+    assert client.post("/api/login", json={"password": PASSWORD}, headers={"X-Forwarded-For": "198.51.100.1"}).status_code == 200
+
+
+def test_firebase_hosting_sends_the_same_security_headers():
+    # static files come from Hosting, API responses from Cloud Run: both must carry the same policy
+    hosting = json.loads(Path("firebase.json").read_text())["hosting"]
+    headers = {h["key"]: h["value"] for rule in hosting["headers"] if rule["source"] == "**" for h in rule["headers"]}
+    assert headers["Content-Security-Policy"] == CSP
+    assert headers["X-Frame-Options"] == "DENY" and headers["X-Content-Type-Options"] == "nosniff"
+    assert {r["source"] for r in hosting["rewrites"]} == {"/api/**", "/health"}
 
 
 def test_garmin_shapes_show_field_names_but_no_values(client):
@@ -191,9 +244,22 @@ def test_push_subscription_validation(client):
     {"ZONA_FAKE": "0"},                                         # no Garmin key and not fake
     {"ZONA_VAPID_PRIVATE_KEY": "k", "ZONA_VAPID_PUBLIC_KEY": "k"},  # push keys without a contact subject
     {"ZONA_TZ": "Mars/Olympus"},
+    {"ZONA_STORE": "postgres"},
+    {"ZONA_SYNC": "0"},                                         # no loop and no tick secret: nothing would ever sync
+    {"ZONA_SYNC": "0", "ZONA_TICK_SECRET": "short"},
+    {"ZONA_SECRETS": "not json"},
+    {"ZONA_SECRETS": '{"ADMIN": "x"}'},                         # only the known secrets may come bundled
 ])
 def test_config_fails_fast_on_bad_settings(tmp_path, override):
     from zona.config import ConfigError
     env = {"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "s" * 40, "ZONA_FAKE": "1", "ZONA_DATA_DIR": str(tmp_path), **override}
     with pytest.raises(ConfigError):
         load_config(env)
+
+
+def test_secrets_can_arrive_bundled_as_one_json_value(tmp_path):
+    bundle = json.dumps({"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "b" * 40, "ZONA_TICK_SECRET": TICK})
+    cfg = load_config({"ZONA_SECRETS": bundle, "ZONA_FAKE": "1", "ZONA_SYNC": "0", "ZONA_DATA_DIR": str(tmp_path),
+                       "ZONA_ORIGINS": "https://zona-1.web.app/, https://zona.steaddev.cl"})
+    assert cfg.password == PASSWORD and cfg.tick_secret == TICK and not cfg.sync_enabled
+    assert cfg.origins == ("https://zona-1.web.app", "https://zona.steaddev.cl")

@@ -1,4 +1,5 @@
-"""SQLite storage. One short-lived connection per call keeps the sync thread and API threads independent."""
+"""Storage. Repo is SQLite, for local runs and tests; firestore_store.FirestoreStore is the same Store on
+Firestore, for Cloud Run. One short-lived SQLite connection per call keeps the sync thread and API threads independent."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from .models import SPORTS, Activity, Day, PlanItem
@@ -53,6 +54,51 @@ SETTING_CHECKS = {
     "remind_every": lambda v: type(v) is int and v in (0, 45, 60, 90), "pause_in_workouts": _is_bool,
     "active_from": _int_in(0, 23), "active_to": _int_in(1, 24), "call_push": _is_bool,
 }
+
+
+def merged_settings(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """current + patch, or ValueError. Shared by both stores so the rules can't drift apart."""
+    bad = [k for k, v in patch.items() if k not in SETTING_CHECKS or not SETTING_CHECKS[k](v)]
+    if bad:
+        raise ValueError(f"Invalid setting: {', '.join(sorted(bad))}")
+    merged = {**current, **patch}
+    if merged["active_from"] >= merged["active_to"]:
+        raise ValueError("active_from must be before active_to")
+    return merged
+
+
+def check_plan_item(weekday: int, start_h: float, minutes: int, sport: str, name: str) -> None:
+    if not (0 <= weekday <= 6 and 0 <= start_h < 24 and 5 <= minutes <= 600 and sport in SPORTS and 0 < len(name) <= 60):
+        raise ValueError("Invalid plan item")
+
+
+class Store(Protocol):
+    """What the service, sync and API need from storage. Repo (SQLite) and FirestoreStore both implement it."""
+
+    tz: ZoneInfo
+    def upsert_activities(self, acts: list[Activity], seen_at: datetime) -> list[Activity]: ...
+    def activities_between(self, first: str, last: str) -> list[Activity]: ...
+    def activity_count(self) -> int: ...
+    def update_days(self, by_date: dict[str, dict[str, Any]]) -> None: ...
+    def days_between(self, first: str, last: str) -> dict[str, Day]: ...
+    def add_water(self, at: datetime, ml: int, source: str) -> int: ...
+    def delete_water(self, water_id: int) -> bool: ...
+    def water_on(self, date: str) -> list[dict]: ...
+    def settings(self) -> dict[str, Any]: ...
+    def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]: ...
+    def plan(self) -> list[PlanItem]: ...
+    def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem: ...
+    def delete_plan(self, plan_id: int) -> bool: ...
+    def add_sub(self, endpoint: str, p256dh: str, auth: str, now: datetime) -> None: ...
+    def subs(self) -> list[dict]: ...
+    def delete_sub(self, endpoint: str) -> None: ...
+    def save_nudge(self, kind: str, key: str, now: datetime, status: str, payload: dict, reason: str | None = None) -> None: ...
+    def nudge(self, key: str) -> dict | None: ...
+    def nudges(self, kind: str, statuses: tuple[str, ...], since: datetime) -> list[dict]: ...
+    def state(self, key: str, default: Any = None) -> Any: ...
+    def set_state(self, key: str, value: Any) -> None: ...
+    def latest_raw(self) -> dict[str, Any]: ...
+    def save_raw(self, endpoint: str, key: str, now: datetime, body: Any) -> None: ...
 
 
 class Repo:
@@ -144,12 +190,7 @@ class Repo:
         return {**DEFAULT_SETTINGS, **{k: v for k, v in stored.items() if k in DEFAULT_SETTINGS}}
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
-        bad = [k for k, v in patch.items() if k not in SETTING_CHECKS or not SETTING_CHECKS[k](v)]
-        if bad:
-            raise ValueError(f"Invalid setting: {', '.join(sorted(bad))}")
-        merged = {**self.settings(), **patch}
-        if merged["active_from"] >= merged["active_to"]:
-            raise ValueError("active_from must be before active_to")
+        merged = merged_settings(self.settings(), patch)
         with self._db() as con:
             con.executemany("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                             [(k, json.dumps(v)) for k, v in patch.items()])
@@ -162,8 +203,7 @@ class Repo:
         return [PlanItem(**dict(r)) for r in rows]
 
     def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem:
-        if not (0 <= weekday <= 6 and 0 <= start_h < 24 and 5 <= minutes <= 600 and sport in SPORTS and 0 < len(name) <= 60):
-            raise ValueError("Invalid plan item")
+        check_plan_item(weekday, start_h, minutes, sport, name)
         with self._db() as con:
             cur = con.execute("INSERT INTO plan (weekday, start_h, minutes, sport, name) VALUES (?, ?, ?, ?, ?)",
                               (weekday, start_h, minutes, sport, name))

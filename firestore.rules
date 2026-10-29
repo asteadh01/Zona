@@ -1,0 +1,10 @@
+rules_version = '2';
+// Zona's server reads and writes with its own service account, which these rules don't apply to.
+// Nothing else ever needs direct access, so every browser and app client is refused.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

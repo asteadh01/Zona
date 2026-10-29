@@ -1,0 +1,15 @@
+# What `gcloud run deploy --source .` leaves out of the upload to Cloud Build.
+# Without this file gcloud would build its own from .gitignore; spelled out so .env can never ship.
+.gcloudignore
+.git/
+.github/
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env
+data/
+*.sqlite3*
+tests/
+docs/
+scripts/

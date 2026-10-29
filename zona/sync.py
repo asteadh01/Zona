@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from . import normalize, rules
-from .db import Repo
+from .db import Store
 from .garmin import GarminKeyError, GarminSource
 from .models import Activity
 from .push import Pusher
@@ -38,7 +38,7 @@ def chunks(first: date, last: date, size: int) -> Iterator[tuple[date, date]]:
 
 
 class Syncer:
-    def __init__(self, repo: Repo, source: GarminSource, service: Service, pusher: Pusher,
+    def __init__(self, repo: Store, source: GarminSource, service: Service, pusher: Pusher,
                  clock: Callable[[], datetime], pause_s: float = 0.5) -> None:
         self.repo, self.source, self.service, self.pusher, self.clock = repo, source, service, pusher, clock
         self.pause_s = pause_s

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import insights, rules
-from .db import Repo
+from .db import Store
 from .models import SPORTS, Activity, Day, PlanItem, WaterDay, WaterSession
 
 HISTORY_WEEKS = 12
@@ -18,7 +18,7 @@ def hours(t: datetime) -> float:
 
 
 class Service:
-    def __init__(self, repo: Repo, tz: ZoneInfo, clock: Callable[[], datetime]) -> None:
+    def __init__(self, repo: Store, tz: ZoneInfo, clock: Callable[[], datetime]) -> None:
         self.repo, self.tz, self.clock = repo, tz, clock
 
     # ---------- plan, water, call ----------
