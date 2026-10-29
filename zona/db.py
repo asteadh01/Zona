@@ -222,6 +222,13 @@ class Repo:
             con.execute("INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                         (key, json.dumps(value)))
 
+    def latest_raw(self) -> dict[str, Any]:
+        """The most recently fetched payload per endpoint."""
+        with self._db() as con:
+            rows = con.execute("""SELECT endpoint, body FROM raw r WHERE fetched_at = (
+                                    SELECT MAX(fetched_at) FROM raw WHERE endpoint = r.endpoint)""").fetchall()
+        return {r["endpoint"]: json.loads(r["body"]) for r in rows}
+
     def save_raw(self, endpoint: str, key: str, now: datetime, body: Any) -> None:
         with self._db() as con:
             con.execute("INSERT INTO raw VALUES (?, ?, ?, ?) ON CONFLICT(endpoint, key) DO UPDATE SET fetched_at = excluded.fetched_at, body = excluded.body",

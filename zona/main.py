@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -14,12 +15,12 @@ from pathlib import Path as FsPath
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from . import auth, fake
+from . import auth, fake, shapes
 from .config import Config, load_config
 from .db import Repo
 from .garmin import GarminSource, LiveGarmin
@@ -280,8 +281,21 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         return {"ok": True, "devices": len(repo.subs())}
 
     @app.post("/api/push/test")
-    def push_test(_: Authed) -> dict:
-        return {"sent": push.send("Zona is set up", "Nudges and reminders will show up like this.", url="/", tag="test")}
+    def push_test(_: Authed, background: BackgroundTasks, delay: Annotated[int, Query(ge=0, le=30)] = 0) -> dict:
+        """delay lets you lock the phone first: Garmin mirrors notifications to the watch while the phone is locked."""
+        def send() -> int:
+            time.sleep(delay)
+            return push.send("Zona is set up", "Nudges and reminders will show up like this.", url="/", tag="test")
+
+        if delay:
+            background.add_task(send)  # runs after the response, so the request doesn't hang while you lock the phone
+            return {"sent": None, "devices": len(repo.subs()), "in_seconds": delay}
+        return {"sent": send()}
+
+    @app.get("/api/garmin-shapes", response_class=PlainTextResponse)
+    def garmin_shapes(_: Authed) -> str:
+        """Field names and types of the latest Garmin responses, no values: to check normalize.py against real data."""
+        return shapes.shapes(repo.latest_raw())
 
     @app.post("/api/sync")
     async def sync_now(_: Authed) -> dict:

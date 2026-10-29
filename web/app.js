@@ -122,6 +122,7 @@ const ACTIONS = {
   async sync() { await api('/api/sync', { method: 'POST' }); ui.msg = 'Synced.'; await render(); },
   'push-on': enablePush,
   async 'push-test'() { const r = await api('/api/push/test', { method: 'POST' }); ui.msg = r.sent ? 'Test sent.' : 'Nothing was sent. Turn notifications on first.'; await render(); },
+  async 'push-test-later'() { await api('/api/push/test?delay=10', { method: 'POST' }); ui.msg = 'Lock your phone now. The test arrives in 10 seconds, and your watch should buzz.'; await render(); },
   async logout() { try { await api('/api/logout', { method: 'POST' }); } finally { showLogin(); } },
   async 'fake-run'() { const r = await api('/api/dev/finish-workout', { method: 'POST', body: { sport: 'running', minutes: 47, name: 'Easy run' } }); ui.nudge = r.nudge; ui.nudgeLogged = false; await render(); },
   async dismiss(t) { dismissed.add(t.dataset.key); try { localStorage.setItem('zona.dismissed', JSON.stringify([...dismissed].slice(-50))); } catch { /* not remembered */ } ui.nudge = null; await render(); },

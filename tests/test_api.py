@@ -141,6 +141,25 @@ def test_month_trends_and_insights(client):
     assert client.get("/api/insights").json()["enough"] is True
 
 
+def test_delayed_test_push_returns_at_once_and_sends_afterwards(client, pusher, monkeypatch):
+    import zona.main
+    monkeypatch.setattr(zona.main.time, "sleep", lambda s: None)
+    login(client)
+    assert client.post("/api/push/test", params={"delay": 10}).json()["in_seconds"] == 10
+    assert pusher.titles()[-1] == "Zona is set up"  # TestClient runs background tasks before returning
+    assert client.post("/api/push/test", params={"delay": 300}).status_code == 422
+
+
+def test_garmin_shapes_show_field_names_but_no_values(client):
+    assert client.get("/api/garmin-shapes").status_code == 401
+    login(client)
+    assert client.get("/api/garmin-shapes").text == "Nothing synced from Garmin yet."
+    client.post("/api/sync")
+    text = client.get("/api/garmin-shapes").text
+    assert "== activities" in text and "activityName: str" in text and "totalSteps: int" in text
+    assert "Easy run" not in text and "2026-10" not in text  # names and types only, never the data
+
+
 def test_fake_workout_produces_a_nudge(client, pusher):
     login(client)
     client.post("/api/sync")

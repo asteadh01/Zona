@@ -11,20 +11,10 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
 
 from .garmin import LiveGarmin
+from .shapes import shape
 from .push import generate_vapid_keys
-
-
-def shape(value: Any, depth: int = 0) -> str:
-    pad = "  " * depth
-    if isinstance(value, dict):
-        return "\n".join(f"{pad}{k}: {type(v).__name__}" + ("\n" + shape(v, depth + 1) if isinstance(v, (dict, list)) and v else "")
-                         for k, v in list(value.items())[:40])
-    if isinstance(value, list):
-        return f"{pad}[{len(value)} items]" + ("\n" + shape(value[0], depth + 1) if value else "")
-    return f"{pad}{type(value).__name__}"
 
 
 def inspect() -> int:

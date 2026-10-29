@@ -281,11 +281,14 @@ export function train(plan, me, sync, ui) {
     <p class="note">Building workouts and sending them to your watch comes in the next version.</p></section>`;
   const pushState = !me.push.enabled ? '<p class="note">Push isn\'t configured on the server yet (ZONA_VAPID_* settings).</p>'
     : ui.pushBlocked ? `<p class="note">${esc(ui.pushBlocked)}</p>`
-      : `<div class="btnrow"><button class="btn" type="button" data-act="push-on">${me.devices ? 'Re-register this iPhone' : 'Turn on notifications'}</button><button class="btn ghost" type="button" data-act="push-test"${me.devices ? '' : ' disabled'}>Send a test</button></div><p class="note">${me.devices} device${me.devices === 1 ? '' : 's'} registered.</p>`;
+      : `<div class="btnrow"><button class="btn" type="button" data-act="push-on">${me.devices ? 'Re-register this iPhone' : 'Turn on notifications'}</button><button class="btn ghost" type="button" data-act="push-test"${me.devices ? '' : ' disabled'}>Send a test</button></div>
+        <button class="btn ghost" type="button" data-act="push-test-later"${me.devices ? '' : ' disabled'}>Test the watch: send in 10 s, then lock the phone</button>
+        <p class="note">${me.devices} device${me.devices === 1 ? '' : 's'} registered.</p>`;
   h += acard('Zona', me.fake ? 'sample data' : 'your Garmin', `<div class="set">
     <div class="set-r"><span>Garmin sync</span><span class="v">${esc(sync.status === 'ok' ? 'working' : sync.status === 'key' ? 'key refused' : sync.status === 'error' ? 'last try failed' : 'not yet')}</span></div></div>
     <button class="btn quiet" type="button" data-act="sync">Sync now</button>${pushState}
     ${ui.msg ? `<p class="note" role="status">${esc(ui.msg)}</p>` : ''}
+    <a class="btn quiet" href="/api/garmin-shapes" target="_blank" rel="noopener">Garmin data shapes (field names, no values)</a>
     <button class="btn quiet" type="button" data-act="logout">Sign out on every device</button>`);
   return h;
 }

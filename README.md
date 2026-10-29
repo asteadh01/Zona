@@ -9,7 +9,7 @@ Design sketch and decisions: <https://claude.ai/artifact/MmNXJopb7NW6r5RFYVZLJN>
 ## Run it locally on sample data
 
 ```bash
-uv venv --python 3.13 .venv
+uv venv --python 3.14 .venv
 uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 cp .env.example .env            # then set ZONA_PASSWORD (12+ chars) and ZONA_SESSION_SECRET; placeholders are refused
 .venv/Scripts/python.exe -m uvicorn zona.main:app --env-file .env --port 8000
@@ -40,7 +40,16 @@ iOS only allows web push for home-screen apps (16.4+). Your Garmin watch mirrors
 
 ## Deploy (k3s + Cloudflare Tunnel)
 
-Build and push the image, create the `zona-secrets` Secret, and apply `k8s/zona.yaml`. The steps are in that file's header. It runs one replica on purpose: SQLite on a ReadWriteOnce volume, and one sync loop, so nudges go out once. Put Cloudflare Access in front of the hostname if you want a second lock besides Zona's password.
+**[docs/PHONE_SETUP.md](docs/PHONE_SETUP.md)** walks through every step, from the Garmin key to the watch buzzing.
+
+In short:
+1. Push to a private GitHub repo.
+2. Add the repo secrets. `scripts/make_secrets.py` makes the app ones; the cluster ones are the same as SportCove's.
+3. Add a `zona` route to the SportCove Cloudflare tunnel.
+
+After that, `.github/workflows/deploy.yml` runs on every push to `main`: tests, an image on GHCR, a deploy over Tailscale, and a `/health` check through the tunnel, with automatic rollback.
+
+It runs one replica on purpose: SQLite lives on a ReadWriteOnce volume, and a single sync loop means each nudge goes out once.
 
 What the server already guards against:
 - **Login:** wrong passwords are limited per client IP, using `CF-Connecting-IP` behind the tunnel.

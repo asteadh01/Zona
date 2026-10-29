@@ -1,16 +1,11 @@
 # Zona on the home k3s cluster, following ObsidianVault/shared/patterns/deploy-blueprint.
 #
-# Before the first apply:
-#   1. Replace OWNER in the image with your GHCR namespace and push an image. The deploy step should
-#      `kubectl set image` to the exact commit SHA, as in the blueprint, rather than run :latest.
-#   2. Create the secret by hand (never commit it):
-#        kubectl -n zona create secret generic zona-secrets \
-#          --from-literal=GARMIN_PERSONAL_API_KEY=... --from-literal=ZONA_PASSWORD=... \
-#          --from-literal=ZONA_SESSION_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
-#          --from-literal=ZONA_VAPID_PRIVATE_KEY=... --from-literal=ZONA_VAPID_PUBLIC_KEY=... \
-#          --from-literal=ZONA_VAPID_SUBJECT=mailto:<an address of yours, sent only to the push services>
-#      ZONA_PASSWORD needs 12+ characters; Zona refuses to start with the .env.example placeholders.
-#   3. Point a Cloudflare Tunnel hostname (e.g. zona.steaddev.cl) at http://zona.zona.svc.cluster.local:80.
+# You don't apply this by hand: .github/workflows/deploy.yml does it on every push to main. It swaps
+# ghcr.io/OWNER/zona:latest for the image built from that exact commit, stamps the run id on the pod
+# template, and creates the zona-secrets Secret from the repo secrets first. Setup: docs/PHONE_SETUP.md.
+#
+# The public hostname (e.g. zona.steaddev.cl) is a route on the existing Cloudflare Tunnel that SportCove's
+# cloudflared already runs, pointing at http://zona.zona.svc.cluster.local:80.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -47,6 +42,8 @@ spec:
     metadata:
       labels:
         app: zona
+      annotations:
+        zona.deploy/run: "manual"  # the deploy workflow replaces this with its run id
     spec:
       automountServiceAccountToken: false  # Zona never talks to the Kubernetes API
       securityContext:

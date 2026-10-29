@@ -1,0 +1,198 @@
+name: 🚢 Test, build and deploy
+
+# Every push to main: run the tests, build the image to GHCR, deploy to the home k3s cluster over
+# Tailscale, check /health through the Cloudflare Tunnel, and roll back if anything fails.
+# Same pattern as SportCove (ObsidianVault/shared/patterns/deploy-blueprint). Setup: docs/PHONE_SETUP.md.
+# "Run workflow" in the Actions tab redeploys the same commit, e.g. after you renew the Garmin key.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: zona-deploy
+  cancel-in-progress: false
+
+env:
+  NAMESPACE: zona
+  # Settings › Secrets and variables › Actions › Variables › ZONA_HOST, if you pick another hostname
+  ZONA_HOST: ${{ vars.ZONA_HOST || 'zona.steaddev.cl' }}
+
+jobs:
+  test:
+    name: 🧪 Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: 📥 Install
+        run: pip install -r requirements-dev.txt
+
+      - name: 🧪 pytest
+        run: python -m pytest -p no:warnings
+
+  build:
+    name: 🐳 Build image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🏷️ Image name
+        id: name
+        # GHCR names must be lowercase; the owner is your GitHub account
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/zona" >> "$GITHUB_OUTPUT"
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔑 Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛠️ Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.name.outputs.image }}:latest
+            ${{ steps.name.outputs.image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: 🚀 Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔎 Check the repo secrets exist
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          KUBECONFIG_RAW: ${{ secrets.KUBECONFIG_RAW }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GARMIN_PERSONAL_API_KEY: ${{ secrets.GARMIN_PERSONAL_API_KEY }}
+          ZONA_PASSWORD: ${{ secrets.ZONA_PASSWORD }}
+          ZONA_SESSION_SECRET: ${{ secrets.ZONA_SESSION_SECRET }}
+          ZONA_VAPID_PRIVATE_KEY: ${{ secrets.ZONA_VAPID_PRIVATE_KEY }}
+          ZONA_VAPID_PUBLIC_KEY: ${{ secrets.ZONA_VAPID_PUBLIC_KEY }}
+          ZONA_VAPID_SUBJECT: ${{ secrets.ZONA_VAPID_SUBJECT }}
+        run: |
+          missing=0
+          for name in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET KUBECONFIG_RAW GHCR_PULL_TOKEN GARMIN_PERSONAL_API_KEY \
+                      ZONA_PASSWORD ZONA_SESSION_SECRET ZONA_VAPID_PRIVATE_KEY ZONA_VAPID_PUBLIC_KEY ZONA_VAPID_SUBJECT; do
+            if [ -z "${!name}" ]; then echo "❌ missing repo secret: $name"; missing=1; else echo "✅ $name"; fi
+          done
+          [ "$missing" -eq 0 ] || { echo "::error::Add the missing secrets (docs/PHONE_SETUP.md, step 4)."; exit 1; }
+
+      - name: 🔗 Join the tailnet
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: 📥 Install kubectl
+        run: |
+          ver="$(curl -sSL https://dl.k8s.io/release/stable.txt)"
+          curl -sSLO "https://dl.k8s.io/release/${ver}/bin/linux/amd64/kubectl"
+          sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+      - name: 🔐 Kubeconfig
+        env:
+          KUBECONFIG_RAW: ${{ secrets.KUBECONFIG_RAW }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s\n' "$KUBECONFIG_RAW" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: 🛰️ Wait for the cluster API
+        run: |
+          for i in $(seq 1 18); do
+            kubectl version --request-timeout=15s >/dev/null 2>&1 && { echo "✅ reachable (attempt $i)"; exit 0; }
+            echo "attempt $i/18: retrying in 10s"; sleep 10
+          done
+          echo "::error::Cluster API unreachable over the tailnet after ~3 minutes."; exit 1
+
+      - name: 🛠️ Namespace and image pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          # A long-lived PAT (read:packages), not this job's GITHUB_TOKEN: that one dies when the job ends,
+          # and a pod rescheduled later would hit ImagePullBackOff (the blueprint's lesson from SportCove).
+          kubectl create secret docker-registry ghcr-pull --namespace "$NAMESPACE" --docker-server=ghcr.io \
+            --docker-username="${{ github.repository_owner }}" --docker-password="$GHCR_PULL_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 💉 App secrets
+        # Values reach the shell as env vars, never pasted into the script, so quotes in them can't break or inject.
+        env:
+          GARMIN_PERSONAL_API_KEY: ${{ secrets.GARMIN_PERSONAL_API_KEY }}
+          ZONA_PASSWORD: ${{ secrets.ZONA_PASSWORD }}
+          ZONA_SESSION_SECRET: ${{ secrets.ZONA_SESSION_SECRET }}
+          ZONA_VAPID_PRIVATE_KEY: ${{ secrets.ZONA_VAPID_PRIVATE_KEY }}
+          ZONA_VAPID_PUBLIC_KEY: ${{ secrets.ZONA_VAPID_PUBLIC_KEY }}
+          ZONA_VAPID_SUBJECT: ${{ secrets.ZONA_VAPID_SUBJECT }}
+        run: |
+          kubectl create secret generic zona-secrets --namespace "$NAMESPACE" \
+            --from-literal=GARMIN_PERSONAL_API_KEY="$GARMIN_PERSONAL_API_KEY" \
+            --from-literal=ZONA_PASSWORD="$ZONA_PASSWORD" \
+            --from-literal=ZONA_SESSION_SECRET="$ZONA_SESSION_SECRET" \
+            --from-literal=ZONA_VAPID_PRIVATE_KEY="$ZONA_VAPID_PRIVATE_KEY" \
+            --from-literal=ZONA_VAPID_PUBLIC_KEY="$ZONA_VAPID_PUBLIC_KEY" \
+            --from-literal=ZONA_VAPID_SUBJECT="$ZONA_VAPID_SUBJECT" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 🏗️ Apply the manifest at this commit's image
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          # The run id in the pod template restarts the pod on every deploy, so renewed secrets always take effect.
+          sed -e "s#ghcr.io/OWNER/zona:latest#${IMAGE}#" -e "s#zona.deploy/run: \"manual\"#zona.deploy/run: \"${RUN_ID}\"#" \
+            k8s/zona.yaml | kubectl apply -f -
+
+      - name: ⏳ Wait for the rollout
+        run: |
+          if ! kubectl rollout status deployment/zona -n "$NAMESPACE" --timeout=5m; then
+            kubectl get pods -n "$NAMESPACE" -o wide
+            kubectl logs deployment/zona -n "$NAMESPACE" --tail=40 || true
+            echo "::error::Rollout failed, rolling back to the previous version."
+            kubectl rollout undo deployment/zona -n "$NAMESPACE" || echo "::warning::Nothing to roll back to (first deploy)."
+            exit 1
+          fi
+
+      - name: 🔎 Health check through the tunnel
+        run: |
+          for i in $(seq 1 20); do
+            curl -fsS "https://${ZONA_HOST}/health" >/dev/null && { echo "✅ https://${ZONA_HOST} is up"; exit 0; }
+            echo "attempt $i/20: not answering yet, retrying in 15s"; sleep 15
+          done
+          echo "::error::https://${ZONA_HOST}/health never answered. Check the tunnel's public hostname (docs/PHONE_SETUP.md, step 5). Rolling back."
+          kubectl rollout undo deployment/zona -n "$NAMESPACE" || true
+          exit 1
