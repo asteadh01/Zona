@@ -22,7 +22,9 @@ async function request<T>(path: string, { method = 'GET', body }: Options = {}):
   }
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(typeof data?.detail === 'string' ? data.detail : `Zona's server answered ${response.status}.`);
+    if (typeof data?.detail === 'string') throw new Error(data.detail);
+    // Cloud Run answers these itself, with no detail, while an instance starts: right after a deploy, for example.
+    throw new Error(response.status === 429 || response.status === 503 ? "Zona's server is starting up. Try again in a minute." : `Zona's server answered ${response.status}.`);
   }
   const type = response.headers.get('content-type') ?? '';
   return (type.includes('json') ? response.json() : response.text()) as Promise<T>;
