@@ -106,10 +106,11 @@ class FakeGarmin:
         return acts[start:start + limit]
 
     def get_daily_summaries(self, start_date: date, end_date: date) -> dict:
-        return {"data": [{"calendarDate": x["date"].isoformat(), "totalKilocalories": x["active"] + x["bmr"],
-                          "activeKilocalories": x["active"], "bmrKilocalories": x["bmr"], "totalSteps": x["steps"],
-                          "moderateIntensityMinutes": x["moderate"], "vigorousIntensityMinutes": x["vigorous"],
-                          "bodyBatteryAtWakeTime": x["bb"], "bodyBatteryMostRecentValue": x["bb_now"]}
+        return {"data": [{"calendarDate": x["date"].isoformat(),
+                          "calories": {"burnedResting": x["bmr"], "burnedActive": x["active"], "burnedTotal": x["active"] + x["bmr"]},
+                          "movement": {"steps": {"goal": 10000, "value": x["steps"]}},
+                          "intensityMinutes": {"goal": 150, "moderate": x["moderate"], "vigorous": x["vigorous"]},
+                          "bodyBattery": {"maxValue": x["bb"], "latestValue": x["bb_now"]}}
                          for x in self._days(start_date, end_date)]}
 
     def get_daily_sleep_summaries(self, start_date: date, end_date: date) -> list[dict]:

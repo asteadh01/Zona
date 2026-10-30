@@ -1,9 +1,11 @@
 """Turn Personal API JSON into Zona records.
 
 Garmin publishes paths but not response schemas for the Personal API, so every lookup here tries the
-field names Garmin Connect has used for years and tolerates their absence. Raw payloads are kept in
-the database (see db.save_raw) and `python -m zona inspect` prints real ones, so the mapping can be
-checked against an actual key.
+names seen in real responses first (checked 2026-10-30), then the ones Garmin Connect has used for years,
+and tolerates their absence. Raw payloads are kept in the database (see db.save_raw) and
+`python -m zona inspect` prints real ones, so the mapping can be checked against an actual key.
+
+Changing a mapping doesn't fix days already stored: bump sync.WELLNESS_VERSION to read them again.
 """
 
 from __future__ import annotations
@@ -114,15 +116,19 @@ def daily_summaries(payload: Any) -> dict[str, Fields]:
         day = _date(it)
         if not day:
             continue
-        total, active, bmr = (_num(it.get(k)) for k in ("totalKilocalories", "activeKilocalories", "bmrKilocalories"))
-        moderate, vigorous = _num(it.get("moderateIntensityMinutes")), _num(it.get("vigorousIntensityMinutes"))
+        total = _num(dig(it, ("calories", "burnedTotal"), ("totalKilocalories",)))
+        active = _num(dig(it, ("calories", "burnedActive"), ("activeKilocalories",)))
+        bmr = _num(dig(it, ("calories", "burnedResting"), ("bmrKilocalories",)))
+        moderate = _num(dig(it, ("intensityMinutes", "moderate"), ("moderateIntensityMinutes",)))
+        vigorous = _num(dig(it, ("intensityMinutes", "vigorous"), ("vigorousIntensityMinutes",)))
         fields = {
             "total_kcal": total, "active_kcal": active,
             "resting_kcal": bmr if bmr is not None else (total - active if total is not None and active is not None else None),
-            "steps": _int(it.get("totalSteps")),
+            "steps": _int(dig(it, ("movement", "steps", "value"), ("totalSteps",))),
             "intensity_min": None if moderate is None and vigorous is None else (moderate or 0) + 2 * (vigorous or 0),
-            "bb_wake": _int(dig(it, ("bodyBatteryAtWakeTime",), ("bodyBatteryHighestValue",))),
-            "bb_now": _int(it.get("bodyBatteryMostRecentValue")),
+            # The Personal API has no at-wake value. The day's high is the closest: Body Battery peaks around waking.
+            "bb_wake": _int(dig(it, ("bodyBatteryAtWakeTime",), ("bodyBattery", "maxValue"), ("bodyBatteryHighestValue",))),
+            "bb_now": _int(dig(it, ("bodyBattery", "latestValue"), ("bodyBatteryMostRecentValue",))),
         }
         out[day] = {k: v for k, v in fields.items() if v is not None}
     return out

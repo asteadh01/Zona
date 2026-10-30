@@ -11,7 +11,7 @@ Personal iPhone sports dashboard on Garmin's Personal API: a FastAPI server (syn
 - **Cloud Run CPU:** Cloud Run gives CPU only while a request is open, so never leave work for after the response (no BackgroundTasks). The scheduler's `/internal/tick` does the syncing there; `ZONA_SYNC=0` turns the loop off.
 - **Auth:** bearer tokens only, kept in the Keychain (`expo-secure-store`). No cookies, so no origin checks or CSP. Logout revokes every token and deletes every push token.
 - **App conventions:** as of Expo SDK 56, import navigation from `expo-router/react-navigation`, not `@react-navigation/native`. Anything from a notification or a deep link gets validated before use (`utils/notification-payload.ts`). Change `src/types/api.ts` when an API response changes.
-- **Garmin field names:** unverified until real data has been checked (Train › Zona › Garmin data shapes, or `python -m zona inspect`). Keep `normalize.py` tolerant (`dig` with fallbacks) and never zero-fill missing fields.
+- **Garmin field names:** checked against real responses on 2026-10-30; Garmin can still change them (Train › Zona › Garmin data shapes, or `python -m zona inspect`). Keep `normalize.py` tolerant (`dig` with fallbacks) and never zero-fill missing fields. After changing how daily data is read, bump `sync.WELLNESS_VERSION` so stored days are read again.
 - **Git:** never push to a remote; local commits only. Deploying and EAS builds are the user's commands, never run with their project.
 
 ## Knowledge Base

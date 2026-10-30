@@ -31,7 +31,18 @@ def test_activity_without_id_or_time_is_dropped():
     assert normalize.activities([{"activityId": 2}, RUN], TZ)[0].id == "17283001"
 
 
-def test_daily_summaries_accept_a_data_wrapper():
+def test_daily_summaries_read_garmins_real_nested_shape():
+    out = normalize.daily_summaries({"data": [{
+        "calendarDate": "2026-10-27",
+        "calories": {"burnedResting": 1760, "burnedActive": 1080, "burnedTotal": 2840},
+        "movement": {"steps": {"goal": 10000, "value": 15389, "distanceInMeters": 11200.5}},
+        "intensityMinutes": {"goal": 150, "moderate": 30, "vigorous": 20},
+        "bodyBattery": {"minValue": 25, "maxValue": 80, "chargedValue": 60, "drainedValue": 55, "latestValue": 59}}]})
+    assert out["2026-10-27"] == {"total_kcal": 2840, "active_kcal": 1080, "resting_kcal": 1760, "steps": 15389,
+                                 "intensity_min": 70, "bb_wake": 80, "bb_now": 59}
+
+
+def test_daily_summaries_accept_older_flat_names():
     out = normalize.daily_summaries({"data": [{
         "calendarDate": "2026-10-27", "totalKilocalories": 2840, "activeKilocalories": 1080, "bmrKilocalories": 1760,
         "totalSteps": 15389, "moderateIntensityMinutes": 30, "vigorousIntensityMinutes": 20,

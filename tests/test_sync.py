@@ -13,6 +13,25 @@ def test_first_tick_backfills_history(syncer, repo, service, clock):
     assert repo.nudges("workout", ("sent", "skipped", "held"), datetime(2026, 1, 1, tzinfo=clock().tzinfo)) == []
 
 
+def test_days_stored_before_a_mapping_change_are_read_again_once(syncer, fake, repo, clock, monkeypatch):
+    syncer.tick()
+    asked, real = [], fake.get_daily_summaries
+    monkeypatch.setattr(fake, "get_daily_summaries", lambda a, b: asked.append(a) or real(a, b))
+    today = clock().date()
+
+    syncer.tick(force=True)  # a fresh backfill already read everything with the current mapping
+    assert min(asked) == today - timedelta(days=6)
+
+    asked.clear()
+    repo.set_state("wellness_version", 0)
+    syncer.tick(force=True)
+    assert min(asked) == today - timedelta(days=84)
+
+    asked.clear()
+    syncer.tick(force=True)
+    assert min(asked) == today - timedelta(days=6)
+
+
 def test_next_poll_follows_the_plan(syncer, repo, clock):
     repo.add_plan(1, 13.5, 45, "run", "Lunch run")  # Tuesday 13:30, so 14:20 is inside the fast window
     syncer.tick()

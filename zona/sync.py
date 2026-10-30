@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 TICK_MIN = 5
 BACKFILL_DAYS = 180
 WELLNESS_DAYS = 84  # 12 weeks: enough for Trends, Insights and the HRV baseline
+WELLNESS_VERSION = 1  # bump when normalize reads daily data differently: stored days are read again once
 PAGE = 50
 HOLD_RELEASE = timedelta(minutes=60)  # a held nudge goes out alone if its follow-up session never syncs
 CALL_HOURS = (5, 12)
@@ -69,6 +70,8 @@ class Syncer:
             if self.repo.state("backfilled") is None:
                 self.backfill(now)
             else:
+                if self.repo.state("wellness_version") != WELLNESS_VERSION:
+                    self._read_all_wellness(now)
                 self.incremental(now)
         except GarminKeyError as exc:
             self.repo.set_state("sync", {"status": "key", "last": last, "error": str(exc)})
@@ -97,6 +100,10 @@ class Syncer:
             ))
             time.sleep(self.pause_s)
 
+    def _read_all_wellness(self, now: datetime) -> None:
+        self._wellness(now, now.date() - timedelta(days=WELLNESS_DAYS), now.date(), 28)
+        self.repo.set_state("wellness_version", WELLNESS_VERSION)
+
     def backfill(self, now: datetime) -> None:
         """First run: activities back 180 days, wellness back 12 weeks, in chunks Garmin's range caps allow."""
         today, tz = now.date(), self.service.tz
@@ -109,7 +116,7 @@ class Syncer:
                 break
             start += PAGE
             time.sleep(self.pause_s)
-        self._wellness(now, today - timedelta(days=WELLNESS_DAYS), today, 28)
+        self._read_all_wellness(now)
         self.repo.set_state("backfilled", now.isoformat())
 
     def incremental(self, now: datetime) -> None:

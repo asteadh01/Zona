@@ -207,7 +207,7 @@ def test_garmin_shapes_show_field_names_but_no_values(client):
     assert client.get("/api/garmin-shapes").text == "Nothing synced from Garmin yet."
     client.post("/api/sync")
     text = client.get("/api/garmin-shapes").text
-    assert "== activities" in text and "activityName: str" in text and "totalSteps: int" in text
+    assert "== activities" in text and "activityName: str" in text and "burnedTotal: int" in text
     assert "Easy run" not in text and "2026-10" not in text  # names and types only, never the data
 
 
