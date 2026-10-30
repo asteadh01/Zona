@@ -1,9 +1,10 @@
 import { Stack, router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { LaunchOverlay } from '@/components/launch-overlay';
 import { NotificationResponses } from '@/features/notifications/notification-responses';
 import { configureNotifications, refreshPushToken } from '@/services/notifications';
 import { useAuthStore } from '@/store/auth-store';
@@ -14,14 +15,11 @@ void configureNotifications().catch(() => undefined); // only the buttons on a n
 export default function RootLayout() {
   const token = useAuthStore((state) => state.token);
   const ready = useAuthStore((state) => state.ready);
+  const [launching, setLaunching] = useState(true);
 
   useEffect(() => {
     void useAuthStore.getState().load();
   }, []);
-
-  useEffect(() => {
-    if (ready) void SplashScreen.hideAsync();
-  }, [ready]);
 
   useEffect(() => {
     if (token) void refreshPushToken().catch(() => undefined);
@@ -30,7 +28,7 @@ export default function RootLayout() {
   if (!ready) return null;
   return (
     <>
-      <StatusBar style="auto" />
+      <StatusBar style={launching ? 'light' : 'auto'} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Protected guard={!!token}>
           <Stack.Screen name="(tabs)" />
@@ -41,6 +39,7 @@ export default function RootLayout() {
         </Stack.Protected>
       </Stack>
       {token && Platform.OS !== 'web' ? <NotificationResponses onOpen={(href) => router.navigate(href)} /> : null}
+      {launching ? <LaunchOverlay onDone={() => setLaunching(false)} /> : null}
     </>
   );
 }

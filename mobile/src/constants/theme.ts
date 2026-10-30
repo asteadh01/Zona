@@ -30,6 +30,9 @@ const dark: typeof light = {
 
 export type Theme = typeof light;
 
+// The launch screen and app icon, the same in both modes. scripts/make_icons.py and app.json repeat these.
+export const BRAND = { bg: '#104281', ink: '#ffffff', ramp: ['#2a78d6', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'] } as const;
+
 export function useTheme(): Theme {
   return useColorScheme() === 'dark' ? dark : light;
 }
