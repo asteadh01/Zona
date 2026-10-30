@@ -1,8 +1,8 @@
 import { useAuthStore } from '@/store/auth-store';
 import type { Home, Insights, Me, Month, Nudge, PlanItem, Settings, SyncStatus, Trends, Water } from '@/types/api';
+import { apiBase } from '@/utils/api-base';
 
-// The server's address comes from eas.json in builds, and from mobile/.env in local development.
-const BASE = (process.env.EXPO_PUBLIC_ZONA_API ?? 'http://localhost:8000').replace(/\/$/, '');
+const BASE = apiBase(process.env.EXPO_PUBLIC_ZONA_API, __DEV__);
 
 type Options = { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown };
 

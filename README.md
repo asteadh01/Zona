@@ -8,14 +8,14 @@ Design sketch and decisions: <https://claude.ai/artifact/MmNXJopb7NW6r5RFYVZLJN>
 
 ## Put it on your phone
 
-**[docs/PHONE_SETUP.md](docs/PHONE_SETUP.md)** walks through every step, from the Firebase project to the watch buzzing. After setup, a server release is one command, and an app release is one EAS build:
+**[docs/PHONE_SETUP.md](docs/PHONE_SETUP.md)** walks through every step, from the Firebase project to the watch buzzing. After setup, a server release is one command, and most app releases are one over-the-air update. Native changes need a new EAS build:
 
 ```bash
 .venv/Scripts/python.exe scripts/zona_cloud.py deploy --project YOUR-PROJECT-ID
 ```
 
 ```bash
-cd mobile && npx eas-cli build --profile phone --platform ios
+cd mobile && npx eas-cli update --channel phone --platform ios --message "what changed" --environment production
 ```
 
 It runs on Firebase's Blaze plan, and one person's use stays inside Blaze's free allowances:
@@ -89,7 +89,7 @@ The first sync backfills 180 days of activities and 12 weeks of daily data, in c
 | `mobile/src/app/` | the Expo app's routes: sign-in, Home (Today · Month · Insights), Trends, Train, Water |
 | `mobile/src/features/`, `components/`, `services/` | what each screen draws, shared UI and charts, the API client and notifications |
 | `firebase.json`, `firestore.rules`, `Dockerfile`, `scripts/zona_cloud.py` | how the server is deployed |
-| `mobile/eas.json`, `mobile/app.json` | how the app is built |
+| `mobile/eas.json`, `mobile/app.json` | how the app is built and updated |
 
 ## Not in v1
 

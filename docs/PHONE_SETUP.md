@@ -191,13 +191,35 @@ The build runs in Expo's cloud and takes about 15 minutes. It ends with a link a
 
 | When | Run this |
 |---|---|
-| The app changed (`mobile/`) | In `mobile`: `npx.cmd --yes eas-cli build --profile phone --platform ios`, then install from the new link. Your sign-in and data stay |
+| The app's screens or logic changed (`mobile/`) | An over-the-air update, see below |
+| A native package or `app.json` changed, or Expo was upgraded | A new build, see below |
 | The server changed (`zona/`) | In `Zona`: `scripts/zona_cloud.py deploy --project zona-624e5` |
 | A new iPhone | `eas-cli device:create`, then build again |
 | The app stops opening after about a year | The Apple certificate expired. Build again; EAS offers to renew it |
 | You'd rather install through TestFlight | `eas-cli build --profile production --platform ios --auto-submit`. It needs the app created in App Store Connect first, and TestFlight builds last 90 days |
 | Garmin key expiring, or Home shows **"Garmin key refused"** | `scripts/zona_cloud.py secrets --project zona-624e5 --only GARMIN_PERSONAL_API_KEY`, then `deploy` |
 | New app password | `secrets --only ZONA_PASSWORD`, then `deploy`. Every device is signed out |
+
+## Updating the app
+
+**Over the air, for screens, text, logic and images.** In `mobile`:
+
+```bash
+npx --yes eas-cli update --channel phone --platform ios --message "what changed" --environment production
+```
+
+The phone downloads it the next time Zona opens and uses it from the launch after that. To get it right away, tap **Train › Zona › Check for an app update**, which restarts the app into it. The line under that button says what's running.
+
+**A new build, for anything native:** a new native package, a change to `app.json` such as the icon, or an Expo upgrade.
+
+1. Raise `version` in `mobile/app.json`, for example from `1.0.0` to `1.1.0`. An update only reaches builds with the same version, so this stops a new update landing on an app that lacks the native parts it needs.
+2. Build, then install from the new link. Your sign-in and data stay:
+
+   ```bash
+   winpty npx.cmd --yes eas-cli build --profile phone --platform ios
+   ```
+
+To undo a bad update, run `npx --yes eas-cli update:roll-back-to-embedded --channel phone --platform ios --message "undo"`. Phones go back to what the build shipped with.
 
 ## If something's off
 
@@ -209,9 +231,10 @@ The build runs in Expo's cloud and takes about 15 minutes. It ends with a link a
 | The app won't open and mentions Developer Mode | Turn it on (step 8) |
 | "This build has no EAS project ID" in Zona | `eas-cli init` hadn't run before the build. Run it, then build again |
 | "Send a test" does nothing | The push key wasn't set up. Run `eas-cli credentials`, choose iOS › **Push Notifications**, add a key, and try again; no new build is needed |
-| Zona says it can't reach the server | Open the address in `eas.json` plus `/health` in Safari; it should say `{"ok":true}`. If that fails, open the **zona** service's **Logs** in the Cloud Run console. A `ConfigError` names the bad setting |
+| Zona says it can't reach the server | Open `https://zona-jzdswiuy2a-uc.a.run.app/health` in Safari; it should say `{"ok":true}`. If that fails, open the **zona** service's **Logs** in the Cloud Run console. A `ConfigError` names the bad setting |
 | "Too many wrong passwords" at sign-in | Five wrong tries from your address, or a lot of wrong tries from anywhere. Wait 15 minutes. A phone that's already signed in keeps working |
 | "Sync failed" on Home | Garmin didn't answer. The next 5-minute tick retries, or tap the chip to retry now |
 | No notification arrives | iPhone Settings › Notifications › Zona, Focus modes, and in Zona, Train › Zona › devices registered |
 | `gcloud` or `firebase` says permission denied | You're signed in as a different Google account. Run `gcloud auth login` or `npx.cmd --yes firebase-tools@15 login` again |
+| "Zona is up to date" right after publishing | The update's `version` doesn't match the installed build, or that build predates updates. Compare with **Train › Zona**, and build again if needed |
 | A Firebase budget email arrives | Tell me what it says. Something is outside the free allowances |

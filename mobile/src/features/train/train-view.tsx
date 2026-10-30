@@ -5,6 +5,7 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { Btn, BtnRow, Card, Lead, Note, Seg, SetRow, SportChip } from '@/components/ui';
 import { SPORT_LABEL, SPORT_ORDER, type Sport, type Theme, useTheme } from '@/constants/theme';
 import { api } from '@/services/api';
+import { appVersionLabel, installLatestUpdate } from '@/services/app-updates';
 import { enablePush } from '@/services/notifications';
 import { useAuthStore } from '@/store/auth-store';
 import type { Me, PlanItem, SyncStatus } from '@/types/api';
@@ -134,6 +135,8 @@ function AppCard({ me, sync, onChanged }: AppProps) {
       <Btn label="Test the watch: send in 10 s, then lock" kind="ghost" disabled={!me.devices} onPress={testWatch} />
       <Note>{devices}</Note>
       {message ? <Lead>{message}</Lead> : null}
+      <Btn label="Check for an app update" kind="quiet" onPress={() => void run(installLatestUpdate)} />
+      <Note>{appVersionLabel()}</Note>
       <Btn label="Garmin data shapes (field names, no values)" kind="quiet" onPress={() => router.push('/garmin-shapes')} />
       <Btn label="Sign out on every device" kind="quiet" onPress={() => void signOut()} />
     </Card>

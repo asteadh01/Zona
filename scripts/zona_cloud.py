@@ -219,7 +219,7 @@ def deploy(project: str) -> None:
             print(f"\nOK: {url}/health answered {r.status}.")
     except Exception as exc:  # the first request after a deploy can be slow
         print(f"\nNot yet: {url}/health didn't answer ({type(exc).__name__}). Try it again in a minute.")
-    print(f"\nThe app's API address is {url}. It belongs in mobile/eas.json as EXPO_PUBLIC_ZONA_API.")
+    print(f"\nThe app's API address is {url}. It belongs in mobile/src/utils/api-base.ts as LIVE_API.")
 
 
 def main() -> None:

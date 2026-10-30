@@ -6,15 +6,11 @@
   "build": {
     "phone": {
       "distribution": "internal",
-      "env": {
-        "EXPO_PUBLIC_ZONA_API": "https://zona-jzdswiuy2a-uc.a.run.app"
-      }
+      "channel": "phone"
     },
     "production": {
       "autoIncrement": true,
-      "env": {
-        "EXPO_PUBLIC_ZONA_API": "https://zona-jzdswiuy2a-uc.a.run.app"
-      }
+      "channel": "production"
     }
   },
   "submit": {

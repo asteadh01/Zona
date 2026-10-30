@@ -4,6 +4,12 @@
     "slug": "zona",
     "owner": "asteadh01",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ae9281e8-f40b-4fb9-856c-e21b4b6fb76b"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "zona",
