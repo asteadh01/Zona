@@ -1,6 +1,5 @@
 """Command line helpers.
 
-  python -m zona vapid     print a new VAPID key pair for web push
   python -m zona inspect   with GARMIN_PERSONAL_API_KEY set: show the shape of each response Zona reads,
                            to check normalize.py against your real data (prints field names and types, not values)
 """
@@ -14,7 +13,6 @@ from pathlib import Path
 
 from .garmin import LiveGarmin
 from .shapes import shape
-from .push import generate_vapid_keys
 
 
 def inspect() -> int:
@@ -38,10 +36,6 @@ def inspect() -> int:
 
 
 def main(argv: list[str]) -> int:
-    if argv[:1] == ["vapid"]:
-        private, public = generate_vapid_keys()
-        sys.stdout.write(f"ZONA_VAPID_PRIVATE_KEY={private}\nZONA_VAPID_PUBLIC_KEY={public}\n")
-        return 0
     if argv[:1] == ["inspect"]:
         return inspect()
     sys.stdout.write(__doc__ or "")

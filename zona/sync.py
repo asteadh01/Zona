@@ -148,8 +148,8 @@ class Syncer:
         last_end = max(datetime.fromisoformat(p["ended"]) for p in parts)
         goal = self.service.water_day(now.date(), now).goal
         title, body = rules.nudge_text(names, minutes, ml, goal, late=now - last_end > timedelta(minutes=30))
-        url = f"/?nudge={key}#water"
-        pushed = self.pusher.send(title, body, url=url, tag=key)
+        url = f"/water?nudge={key}"
+        pushed = self.pusher.send(title, body, url=url, tag=key, category="nudge", ml=ml)
         payload = {"ids": [i for p in parts for i in p["ids"]], "names": names, "minutes": minutes, "ml": ml,
                    "ended": last_end.isoformat(), "goal": goal, "title": title, "body": body, "url": url, "pushed": pushed}
         self.repo.save_nudge("workout", key, now, "sent", payload)
@@ -191,5 +191,5 @@ class Syncer:
                                   intake=water.intake, goal=water.goal, in_session=in_session, pause=s["pause_in_workouts"]):
             return
         if self.pusher.send("Time for water", f"{rules.litres(water.intake)} of {rules.litres(water.goal)} so far today.",
-                            url="/#water", tag="reminder"):
+                            url="/water", tag="reminder", category="reminder"):
             self.repo.set_state("reminder_last", now.isoformat())

@@ -1,6 +1,6 @@
 name: 🧪 Tests
 
-# Every push and pull request: the whole suite twice, on SQLite and on the Firestore emulator.
+# Every push and pull request: the server's suite twice, on SQLite and on the Firestore emulator, and the app's typecheck and tests.
 # Deploying is `scripts/zona_cloud.py deploy` from your PC (docs/PHONE_SETUP.md), so no cloud credentials live here.
 on:
   push:
@@ -37,3 +37,29 @@ jobs:
 
       - name: 🧪 pytest
         run: npx --yes firebase-tools@15 emulators:exec --only firestore --project demo-zona "python -m pytest -p no:warnings"
+
+  app:
+    name: 📱 Expo app (typecheck + jest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟩 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: 📥 Install
+        run: npm ci
+
+      - name: 🔎 Typecheck
+        run: npm run typecheck
+
+      - name: 🧪 Jest
+        run: npm test

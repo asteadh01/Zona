@@ -8,3 +8,4 @@ data/
 *.sqlite3-*
 firestore-debug.log
 *.log
+.firebase/

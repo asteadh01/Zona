@@ -30,8 +30,9 @@ class RecordingPusher:
     def __init__(self) -> None:
         self.sent: list[dict] = []
 
-    def send(self, title: str, body: str, url: str = "/", tag: str = "zona") -> int:
-        self.sent.append({"title": title, "body": body, "url": url, "tag": tag})
+    def send(self, title: str, body: str, url: str = "/", tag: str = "zona", category: str | None = None,
+             ml: int | None = None) -> int:
+        self.sent.append({"title": title, "body": body, "url": url, "tag": tag, "category": category, "ml": ml})
         return 1
 
     def titles(self) -> list[str]:

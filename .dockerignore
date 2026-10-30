@@ -6,4 +6,4 @@ data
 .env
 tests
 scripts
-k8s
+mobile

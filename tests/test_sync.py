@@ -155,3 +155,10 @@ def test_water_reminder_respects_the_interval(syncer, repo, pusher, clock):
     clock.advance(minutes=31)
     syncer.tick()
     assert [s["tag"] for s in pusher.sent] == ["reminder", "reminder"]
+
+
+def test_a_fake_workout_after_a_restart_is_a_new_workout(fake, clock):
+    first = fake.finish_workout("running", "Easy run", 47)
+    clock.advance(minutes=1)
+    restarted = type(fake)(fake.tz, clock)
+    assert restarted.finish_workout("running", "Easy run", 47)["activityId"] != first["activityId"]

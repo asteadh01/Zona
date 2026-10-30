@@ -13,3 +13,5 @@ data/
 tests/
 docs/
 scripts/
+mobile/
+.firebase/

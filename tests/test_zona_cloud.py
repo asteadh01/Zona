@@ -13,6 +13,7 @@ import zona_cloud as zc  # noqa: E402
 
 PROJECT = "zona-624e5"
 BUNDLE = {"GARMIN_PERSONAL_API_KEY": "G" * 30, "ZONA_PASSWORD": "P" * 14, "ZONA_TICK_SECRET": "T" * 43}
+OLD_BUNDLE = {**BUNDLE, "ZONA_VAPID_PRIVATE_KEY": "old"}
 
 
 class Cloud:
@@ -79,7 +80,7 @@ def test_setup_is_safe_to_repeat(cloud):
 
 def test_deploy_runs_as_zona_run_and_keeps_secrets_off_the_command_line(cloud):
     c = cloud()
-    zc.deploy(PROJECT, ["https://zona.steaddev.cl/"])
+    zc.deploy(PROJECT)
     run_deploy = c.ran("run", "deploy")[0]
     assert "--service-account=zona-run@zona-624e5.iam.gserviceaccount.com" in run_deploy
     assert "--set-secrets=ZONA_SECRETS=zona-env:latest" in run_deploy and "--max-instances=1" in run_deploy
@@ -92,22 +93,28 @@ def test_deploy_runs_as_zona_run_and_keeps_secrets_off_the_command_line(cloud):
 
 def test_deploy_updates_an_existing_schedule(cloud):
     c = cloud(job_exists=True)
-    zc.deploy(PROJECT, [])
+    zc.deploy(PROJECT)
     assert c.ran("scheduler", "jobs", "update", "http") and not c.ran("scheduler", "jobs", "create")
 
 
 def test_deploy_needs_secrets_first(cloud):
     cloud(bundle=None)
     with pytest.raises(zc.Step, match="secrets"):
-        zc.deploy(PROJECT, [])
+        zc.deploy(PROJECT)
 
 
 def test_secrets_go_in_on_stdin_and_only_the_newest_version_stays(cloud, monkeypatch):
-    c = cloud()
+    c = cloud(bundle=OLD_BUNDLE)
     monkeypatch.setattr(zc, "ask", lambda name: ("N" * 30, False))
     zc.secrets(PROJECT, "GARMIN_PERSONAL_API_KEY")
     added = [json.loads(i) for a, i in c.calls if a[:3] == ["secrets", "versions", "add"]]
-    assert added == [{**BUNDLE, "GARMIN_PERSONAL_API_KEY": "N" * 30}]  # renewing one value keeps the rest
+    assert added == [{**BUNDLE, "GARMIN_PERSONAL_API_KEY": "N" * 30}]  # keeps the rest, drops the retired web-push keys
     assert [a[3] for a in c.ran("secrets", "versions", "destroy")] == ["1", "2"]
     assert c.ran("secrets", "add-iam-policy-binding")[0][3] == "--member=serviceAccount:zona-run@zona-624e5.iam.gserviceaccount.com"
     assert "N" * 30 not in c.all_args()
+
+
+def test_hidden_prompts_refuse_to_run_without_a_real_console(monkeypatch):
+    monkeypatch.setattr(zc.sys.stdin, "isatty", lambda: False, raising=False)
+    with pytest.raises(zc.Step, match="PowerShell"):
+        zc.ask("GARMIN_PERSONAL_API_KEY")

@@ -1,15 +1,14 @@
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from zona.config import load_config
-from zona.main import CSP, create_app
+from zona.main import create_app
 
 PASSWORD = "correct horse battery staple"
 TICK = "t" * 40
-BASE_ENV = {"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "s" * 40, "ZONA_FAKE": "1", "ZONA_SECURE_COOKIES": "0"}
+BASE_ENV = {"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "s" * 40, "ZONA_FAKE": "1"}
 
 
 def make_client(tmp_path, clock, pusher, store, **env):
@@ -24,7 +23,9 @@ def client(tmp_path, clock, pusher, store):
 
 
 def login(c):
-    assert c.post("/api/login", json={"password": PASSWORD}).status_code == 200
+    r = c.post("/api/login", json={"password": PASSWORD})
+    assert r.status_code == 200
+    c.headers["Authorization"] = f"Bearer {r.json()['token']}"
 
 
 def test_health_is_open_and_everything_else_needs_a_session(client):
@@ -35,26 +36,51 @@ def test_health_is_open_and_everything_else_needs_a_session(client):
 
 
 def test_wrong_passwords_are_rate_limited_per_client(client):
-    stranger = {"CF-Connecting-IP": "203.0.113.9"}
+    stranger = {"X-Forwarded-For": "203.0.113.9"}
     for _ in range(5):
         assert client.post("/api/login", json={"password": "nope"}, headers=stranger).status_code == 401
     assert client.post("/api/login", json={"password": PASSWORD}, headers=stranger).status_code == 429
     # a stranger burning their attempts doesn't lock the owner out
-    assert client.post("/api/login", json={"password": PASSWORD}, headers={"CF-Connecting-IP": "198.51.100.7"}).status_code == 200
+    assert client.post("/api/login", json={"password": PASSWORD}, headers={"X-Forwarded-For": "198.51.100.7"}).status_code == 200
 
 
-def test_sign_out_revokes_copied_cookies(client):
+def test_a_forged_forwarded_header_doesnt_buy_more_guesses(client):
+    # Cloud Run appends the real address last, so anything before it is the client's own claim.
+    for i in range(5):
+        forged = {"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.9"}
+        assert client.post("/api/login", json={"password": "nope"}, headers=forged).status_code == 401
+    forged = {"X-Forwarded-For": "10.0.0.99, 203.0.113.9"}
+    assert client.post("/api/login", json={"password": "nope"}, headers=forged).status_code == 429
+
+
+def test_a_forged_forwarded_header_cant_lock_the_owner_out(client):
+    owner = "198.51.100.7"
+    for _ in range(6):
+        client.post("/api/login", json={"password": "nope"}, headers={"X-Forwarded-For": f"{owner}, 203.0.113.9"})
+    assert client.post("/api/login", json={"password": PASSWORD}, headers={"X-Forwarded-For": owner}).status_code == 200
+
+
+def test_a_junk_token_never_reaches_the_database(client, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise AssertionError("read the store for an unsigned token")
+
+    monkeypatch.setattr(client.app.state.repo, "state", fail)
+    assert client.get("/api/me", headers={"Authorization": "Bearer 0.1893456000." + "A" * 43}).status_code == 401
+
+
+def test_sign_out_revokes_tokens_and_stops_pushes(client):
     login(client)
-    stolen = client.cookies.get("__session")
+    assert client.post("/api/push/register", json={"token": "ExponentPushToken[abcdefghijklmnop]"}).json()["devices"] == 1
+    stolen = dict(client.headers)["authorization"]
     assert client.post("/api/logout").status_code == 200
-    client.cookies.set("__session", stolen, domain="zona.test")
-    assert client.get("/api/me").status_code == 401
+    assert client.get("/api/me", headers={"Authorization": stolen}).status_code == 401
+    login(client)
+    assert client.get("/api/me").json()["devices"] == 0
 
 
-@pytest.mark.parametrize("cookie", ["", "²³.abc", "9" * 5000 + ".x", "123.ñññ", "1.2.3", "abc.def"])
-def test_malformed_cookies_get_401_not_500(client, cookie):
-    # a raw header, since the test client itself refuses to encode non-ASCII cookie values
-    assert client.get("/api/me", headers={"Cookie": f"__session={cookie}".encode()}).status_code == 401
+@pytest.mark.parametrize("header", ["", "Bearer", "Bearer abc.def", "Basic abc", "Bearer 1.2.3", "Bearer " + "9" * 5000 + ".x"])
+def test_malformed_tokens_get_401_not_500(client, header):
+    assert client.get("/api/me", headers={"Authorization": header}).status_code == 401
 
 
 def test_big_or_chunked_bodies_are_refused_before_auth(client):
@@ -65,24 +91,19 @@ def test_big_or_chunked_bodies_are_refused_before_auth(client):
         yield b'{"ml": 250}'
 
     assert client.post("/api/water", content=chunks(), headers={"Content-Type": "application/json"}).status_code == 411
+    both = {"Content-Type": "application/json", "Content-Length": "11", "Transfer-Encoding": "chunked"}
+    assert client.post("/api/water", content=chunks(), headers=both).status_code == 411
 
 
-def test_login_sets_an_httponly_cookie(client):
+def test_login_returns_a_token_and_sets_no_cookie(client):
     r = client.post("/api/login", json={"password": PASSWORD})
-    cookie = r.headers["set-cookie"].lower()
-    assert "httponly" in cookie and "samesite=lax" in cookie
-    assert client.get("/api/me").json()["fake"] is True
+    assert r.json()["token"] and "set-cookie" not in r.headers
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {r.json()['token']}"}).json()["fake"] is True
 
 
-def test_cross_origin_writes_are_refused(client):
-    login(client)
-    r = client.post("/api/water", json={"ml": 250}, headers={"Origin": "https://evil.example"})
-    assert r.status_code == 403
-
-
-def test_security_headers(client):
+def test_no_store_headers(client):
     h = client.get("/health").headers
-    assert "frame-ancestors 'none'" in h["content-security-policy"] and h["x-content-type-options"] == "nosniff"
+    assert h["cache-control"] == "no-store" and h["x-content-type-options"] == "nosniff"
 
 
 def test_home_after_a_sync(client):
@@ -172,35 +193,12 @@ def test_tick_is_refused_when_no_secret_is_configured(client):
     assert client.post("/internal/tick", headers={"X-Zona-Tick": ""}).status_code == 403
 
 
-def test_writes_through_firebase_hosting_pass_the_origin_check(tmp_path, clock, pusher, store):
-    # Cloud Run sees its own run.app host; Hosting sends the original one in X-Forwarded-Host
-    with make_client(tmp_path, clock, pusher, store, ZONA_ORIGINS="https://zona-1.web.app") as c:
-        login(c)
-        hosting = {"Origin": "https://zona-9.web.app", "Host": "zona-abc-uc.a.run.app", "X-Forwarded-Host": "zona-9.web.app"}
-        assert c.post("/api/water", json={"ml": 250}, headers=hosting).status_code == 200
-        listed = {"Origin": "https://zona-1.web.app", "Host": "zona-abc-uc.a.run.app"}
-        assert c.post("/api/water", json={"ml": 250}, headers=listed).status_code == 200
-        evil = {"Origin": "https://evil.example", "Host": "zona-abc-uc.a.run.app", "X-Forwarded-Host": "zona-9.web.app"}
-        assert c.post("/api/water", json={"ml": 250}, headers=evil).status_code == 403
-
-
-def test_many_failures_from_many_addresses_slow_every_guess(client, monkeypatch):
-    import zona.main
-    waited = []
-    monkeypatch.setattr(zona.main.time, "sleep", waited.append)
-    for i in range(25):
-        client.post("/api/login", json={"password": "nope"}, headers={"X-Forwarded-For": f"203.0.113.{i}"})
-    assert waited[-1] == 2.0
-    assert client.post("/api/login", json={"password": PASSWORD}, headers={"X-Forwarded-For": "198.51.100.1"}).status_code == 200
-
-
-def test_firebase_hosting_sends_the_same_security_headers():
-    # static files come from Hosting, API responses from Cloud Run: both must carry the same policy
-    hosting = json.loads(Path("firebase.json").read_text())["hosting"]
-    headers = {h["key"]: h["value"] for rule in hosting["headers"] if rule["source"] == "**" for h in rule["headers"]}
-    assert headers["Content-Security-Policy"] == CSP
-    assert headers["X-Frame-Options"] == "DENY" and headers["X-Content-Type-Options"] == "nosniff"
-    assert {r["source"] for r in hosting["rewrites"]} == {"/api/**", "/health"}
+def test_too_many_guesses_from_anywhere_stop_all_logins_but_not_signed_in_phones(client):
+    login(client)
+    for i in range(60):
+        assert client.post("/api/login", json={"password": "nope"}, headers={"X-Forwarded-For": f"203.0.113.{i}"}).status_code == 401
+    assert client.post("/api/login", json={"password": PASSWORD}, headers={"X-Forwarded-For": "198.51.100.1"}).status_code == 429
+    assert client.get("/api/me").status_code == 200
 
 
 def test_garmin_shapes_show_field_names_but_no_values(client):
@@ -224,15 +222,13 @@ def test_fake_workout_produces_a_nudge(client, pusher):
     assert pusher.titles()[-1] == "Easy run done · 47 min"
 
 
-def test_push_subscription_validation(client):
+def test_push_token_validation(client):
     login(client)
-    good = {"endpoint": "https://web.push.apple.com/abc123", "keys": {"p256dh": "B" * 87, "auth": "a" * 22}}
-    assert client.post("/api/push/subscribe", json=good).json()["devices"] == 1
-    assert client.post("/api/push/subscribe", json={**good, "endpoint": "http://insecure"}).status_code == 422
-    for evil in ("https://169.254.169.254/latest", "https://web.push.apple.com.evil.example/x", "https://localhost:8000/api",
-                 "https://evil.com\\@web.push.apple.com/x"):
-        assert client.post("/api/push/subscribe", json={**good, "endpoint": evil}).status_code == 422
-    assert client.post("/api/push/subscribe", json={**good, "keys": {"p256dh": "A" * 21, "auth": "a" * 22}}).status_code == 422
+    good = "ExponentPushToken[abcdefghijklmnop]"
+    assert client.post("/api/push/register", json={"token": good}).json()["devices"] == 1
+    assert client.post("/api/push/register", json={"token": good}).json()["devices"] == 1  # the same phone, once
+    assert client.post("/api/push/register", json={"token": "https://evil.example/x"}).status_code == 422
+
 
 
 @pytest.mark.parametrize("override", [
@@ -242,7 +238,6 @@ def test_push_subscription_validation(client):
     {"ZONA_SESSION_SECRET": "short"},
     {"ZONA_SESSION_SECRET": "replace-with-64-random-characters"},
     {"ZONA_FAKE": "0"},                                         # no Garmin key and not fake
-    {"ZONA_VAPID_PRIVATE_KEY": "k", "ZONA_VAPID_PUBLIC_KEY": "k"},  # push keys without a contact subject
     {"ZONA_TZ": "Mars/Olympus"},
     {"ZONA_STORE": "postgres"},
     {"ZONA_SYNC": "0"},                                         # no loop and no tick secret: nothing would ever sync
@@ -258,8 +253,7 @@ def test_config_fails_fast_on_bad_settings(tmp_path, override):
 
 
 def test_secrets_can_arrive_bundled_as_one_json_value(tmp_path):
-    bundle = json.dumps({"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "b" * 40, "ZONA_TICK_SECRET": TICK})
-    cfg = load_config({"ZONA_SECRETS": bundle, "ZONA_FAKE": "1", "ZONA_SYNC": "0", "ZONA_DATA_DIR": str(tmp_path),
-                       "ZONA_ORIGINS": "https://zona-1.web.app/, https://zona.steaddev.cl"})
+    bundle = json.dumps({"ZONA_PASSWORD": PASSWORD, "ZONA_SESSION_SECRET": "b" * 40, "ZONA_TICK_SECRET": TICK,
+                         "ZONA_VAPID_SUBJECT": "mailto:a@b.co"})  # keys retired with the web app are ignored, not fatal
+    cfg = load_config({"ZONA_SECRETS": bundle, "ZONA_FAKE": "1", "ZONA_SYNC": "0", "ZONA_DATA_DIR": str(tmp_path)})
     assert cfg.password == PASSWORD and cfg.tick_secret == TICK and not cfg.sync_enabled
-    assert cfg.origins == ("https://zona-1.web.app", "https://zona.steaddev.cl")

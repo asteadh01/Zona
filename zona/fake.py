@@ -32,7 +32,7 @@ class FakeGarmin:
         self.tz = tz
         self.clock = clock or (lambda: datetime.now(tz))
         self.extra: list[dict] = []  # sessions added with finish_workout()
-        self._next_id = 9_000_000_000
+        self._next_id = 9_000_000_000 + int(self.clock().timestamp())  # the local database outlives a restart, so ids mustn't repeat
 
     # ---------- generated history ----------
     def _sessions(self, d: date) -> list[dict]:

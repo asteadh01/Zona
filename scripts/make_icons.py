@@ -1,4 +1,4 @@
-"""Draw Zona's home-screen icons (a white drop on the accent blue) with the standard library only.
+"""Draw Zona's app icon and splash image (a white drop on the accent blue) with the standard library only.
 
 Run from the repo root: python scripts/make_icons.py
 """
@@ -11,8 +11,8 @@ import zlib
 from pathlib import Path
 
 BLUE, WHITE = (42, 120, 214), (255, 255, 255)
-CX, CY, R, TIP_Y = 0.5, 0.6, 0.22, 0.17  # drop geometry as fractions of the icon size
-SAMPLES = 4  # per axis, for anti-aliasing
+CX, CY, R, TIP_Y = 0.5, 0.6, 0.22, 0.17  # drop geometry as fractions of the image size
+SAMPLES = 3  # per axis, for anti-aliasing
 
 
 def in_drop(x: float, y: float) -> bool:
@@ -43,6 +43,7 @@ def png(size: int) -> bytes:
 
 
 if __name__ == "__main__":
-    web = Path(__file__).resolve().parent.parent / "web"
-    for name, size in (("apple-touch-icon.png", 180), ("icon-192.png", 192), ("icon-512.png", 512)):
-        (web / name).write_bytes(png(size))
+    images = Path(__file__).resolve().parent.parent / "mobile" / "assets" / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    for name, size in (("icon.png", 1024), ("splash-icon.png", 512)):  # iOS rounds the icon's corners itself
+        (images / name).write_bytes(png(size))

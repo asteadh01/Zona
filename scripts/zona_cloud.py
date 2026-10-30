@@ -1,4 +1,4 @@
-"""Put Zona on Firebase: Hosting for the app, Cloud Run for the server, Firestore, Secret Manager, Cloud Scheduler.
+"""Put Zona's server on Google Cloud: Cloud Run, Firestore, Secret Manager, Cloud Scheduler. The app itself ships with EAS.
 
 Run from the repo root (docs/PHONE_SETUP.md walks through it):
   .venv/Scripts/python.exe scripts/zona_cloud.py setup   --project YOUR-PROJECT-ID   # once
@@ -6,8 +6,8 @@ Run from the repo root (docs/PHONE_SETUP.md walks through it):
   .venv/Scripts/python.exe scripts/zona_cloud.py deploy  --project YOUR-PROJECT-ID   # every release
   .venv/Scripts/python.exe scripts/zona_cloud.py secrets --project ID --only GARMIN_PERSONAL_API_KEY   # renew one
 
-Every gcloud and firebase command is printed before it runs, with secrets masked. Secret values go in on stdin,
-never as arguments, so they don't land in shell history or the process list. Nothing secret is written to disk.
+Every gcloud and firebase command is printed before it runs, with secrets masked. The bundle goes in on stdin, so it
+never lands in shell history. Only the tick header is an argument, briefly, on your own PC. Nothing secret is written to disk.
 """
 
 from __future__ import annotations
@@ -27,8 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from zona.config import MIN_PASSWORD_LEN, PLACEHOLDERS  # noqa: E402
-from zona.push import generate_vapid_keys  # noqa: E402
+from zona.config import BUNDLED, MIN_PASSWORD_LEN, PLACEHOLDERS  # noqa: E402
 
 REGION = "us-central1"  # in Cloud Run's free tier, and where (or next to where) Firestore lives
 SERVICE, SECRET, JOB, ART_REPO = "zona", "zona-env", "zona-tick", "cloud-run-source-deploy"
@@ -39,7 +38,7 @@ APIS = ("run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.goo
 # The default compute account, which Google makes a project Editor, only builds the image from source.
 RUN_ACCOUNT = "zona-run"
 RUN_ROLE, BUILD_ROLE = "roles/datastore.user", "roles/run.builder"
-ASKABLE = ("GARMIN_PERSONAL_API_KEY", "ZONA_PASSWORD", "ZONA_VAPID_SUBJECT")
+ASKABLE = ("GARMIN_PERSONAL_API_KEY", "ZONA_PASSWORD")
 BIND_TRIES, BIND_WAIT_S = 4, 5  # a brand-new service account takes a few seconds to be usable in IAM policies
 
 
@@ -54,7 +53,7 @@ def tool(name: str) -> list[str]:
         return [found]
     if name == "firebase" and shutil.which("npx"):
         return [shutil.which("npx"), "--yes", "firebase-tools@15"]
-    raise Step(f"`{name}` isn't installed. See docs/PHONE_SETUP.md, step 2.")
+    raise Step(f"`{name}` isn't installed. See docs/PHONE_SETUP.md, step 3.")
 
 
 def run(cmd: list[str], *, stdin: str | None = None, capture: bool = False, check: bool = True,
@@ -131,18 +130,22 @@ def ask_password() -> tuple[str, bool]:
             print("  They didn't match.")
 
 
+def need_console() -> None:
+    """Git Bash's default window (mintty) gives Python no real console: hidden prompts would hang, or echo the key."""
+    if not sys.stdin.isatty():
+        raise Step("This step asks for hidden input, which needs a real console. Open PowerShell in the Zona folder "
+                   "and run the same command there.")
+
+
 def ask(name: str) -> tuple[str, bool]:
+    need_console()
     if name == "ZONA_PASSWORD":
         return ask_password()
     if name == "GARMIN_PERSONAL_API_KEY":
         while len(key := getpass.getpass("Garmin Personal API key (hidden as you type): ").strip()) < 20:
             print("  That looks too short. Paste the whole key.")
         return key, False
-    while True:
-        email = input("An email of yours for the push services' contact field (only they see it): ").strip()
-        if "@" in email and "." in email.split("@")[-1] and " " not in email:
-            return f"mailto:{email}", False
-        print("  That doesn't look like an email address.")
+    raise Step(f"Zona doesn't ask for {name}")
 
 
 def current_bundle(project: str) -> dict[str, str] | None:
@@ -155,22 +158,20 @@ def secrets(project: str, only: str | None) -> None:
     if only and bundle is None:
         raise Step("There are no secrets yet. Run `secrets` once without --only.")
     if bundle is not None and not only:
-        answer = input("Zona's secrets already exist. Replace all of them? New push keys mean turning notifications "
-                       "on again on the phone. [y/N] ").strip().lower()
+        need_console()
+        answer = input("Zona's secrets already exist. Replace all of them? Every device gets signed out. [y/N] ").strip().lower()
         if answer != "y":
             print("Kept them. To change one, use --only NAME.")
             return
     generated_password = False
     if only:
+        bundle = {k: v for k, v in bundle.items() if k in BUNDLED}  # drops the old web-push keys
         bundle[only], generated_password = ask(only)
     else:
         garmin, _ = ask("GARMIN_PERSONAL_API_KEY")
-        contact, _ = ask("ZONA_VAPID_SUBJECT")
         password, generated_password = ask("ZONA_PASSWORD")
-        vapid_private, vapid_public = generate_vapid_keys()
         bundle = {"GARMIN_PERSONAL_API_KEY": garmin, "ZONA_PASSWORD": password, "ZONA_SESSION_SECRET": rnd.token_urlsafe(48),
-                  "ZONA_VAPID_PRIVATE_KEY": vapid_private, "ZONA_VAPID_PUBLIC_KEY": vapid_public,
-                  "ZONA_VAPID_SUBJECT": contact, "ZONA_TICK_SECRET": rnd.token_urlsafe(32)}
+                  "ZONA_TICK_SECRET": rnd.token_urlsafe(32)}
     if not quiet_ok("secrets", "describe", SECRET, project=project):
         gcloud("secrets", "create", SECRET, "--replication-policy=automatic", project=project)
     gcloud("secrets", "versions", "add", SECRET, "--data-file=-", stdin=json.dumps(bundle), project=project, capture=True)
@@ -186,15 +187,12 @@ def secrets(project: str, only: str | None) -> None:
 
 
 # ---------- deploy ----------
-def deploy(project: str, extra_origins: list[str]) -> None:
+def deploy(project: str) -> None:
     bundle = current_bundle(project)
     if bundle is None:
         raise Step("No secrets yet. Run `secrets` first.")
     tick = bundle["ZONA_TICK_SECRET"]
-    hosts = [f"https://{project}.web.app", f"https://{project}.firebaseapp.com", *extra_origins]
-    env = {"ZONA_STORE": "firestore", "ZONA_SYNC": "0", "ZONA_TZ": "America/Santiago", "ZONA_SECURE_COOKIES": "1",
-           "ZONA_ORIGINS": ",".join(o.rstrip("/") for o in hosts)}
-    # A file, not --set-env-vars: the origins contain commas, and Windows' cmd mangles gcloud's ^delimiter^ syntax.
+    env = {"ZONA_STORE": "firestore", "ZONA_SYNC": "0", "ZONA_TZ": "America/Santiago"}
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         fh.write("".join(f"{k}: {json.dumps(v)}\n" for k, v in env.items()))
         env_file = fh.name
@@ -208,7 +206,7 @@ def deploy(project: str, extra_origins: list[str]) -> None:
     url = gcloud_json("run", "services", "describe", SERVICE, f"--region={REGION}", project=project)["status"]["url"]
     gcloud("artifacts", "repositories", "set-cleanup-policies", ART_REPO, f"--location={REGION}",
            "--policy=deploy/artifact-cleanup.json", "--no-dry-run", "--quiet", project=project, check=False)
-    run([*tool("firebase"), "deploy", "--only", "hosting,firestore:rules", "--project", project, "--non-interactive"])
+    run([*tool("firebase"), "deploy", "--only", "firestore:rules", "--project", project, "--non-interactive"])
     job = [f"--location={REGION}", f"--schedule={SCHEDULE}", f"--uri={url}/internal/tick", "--http-method=POST",
            "--attempt-deadline=320s"]
     if quiet_ok("scheduler", "jobs", "describe", JOB, f"--location={REGION}", project=project):
@@ -216,13 +214,12 @@ def deploy(project: str, extra_origins: list[str]) -> None:
     else:
         gcloud("scheduler", "jobs", "create", "http", JOB, *job, f"--headers=X-Zona-Tick={tick}", project=project, mask=(tick,))
     gcloud("scheduler", "jobs", "run", JOB, f"--location={REGION}", project=project)  # the first sync starts now
-    site = f"https://{project}.web.app"
     try:
-        with urllib.request.urlopen(f"{site}/health", timeout=30) as r:
-            print(f"\nOK: {site}/health answered {r.status}.")
-    except Exception as exc:  # a brand-new Hosting site can take a minute
-        print(f"\nNot yet: {site}/health didn't answer ({type(exc).__name__}). Try it again in a minute.")
-    print(f"\nOpen {site} in Safari on your iPhone (docs/PHONE_SETUP.md, step 8).")
+        with urllib.request.urlopen(f"{url}/health", timeout=30) as r:
+            print(f"\nOK: {url}/health answered {r.status}.")
+    except Exception as exc:  # the first request after a deploy can be slow
+        print(f"\nNot yet: {url}/health didn't answer ({type(exc).__name__}). Try it again in a minute.")
+    print(f"\nThe app's API address is {url}. It belongs in mobile/eas.json as EXPO_PUBLIC_ZONA_API.")
 
 
 def main() -> None:
@@ -230,12 +227,10 @@ def main() -> None:
     parser.add_argument("command", choices=("setup", "secrets", "deploy"))
     parser.add_argument("--project", required=True, help="your Firebase project ID, e.g. zona-12ab3")
     parser.add_argument("--only", choices=ASKABLE, help="secrets: change just this one")
-    parser.add_argument("--origin", action="append", default=[], help="deploy: another address you open Zona at, "
-                        "e.g. https://zona.steaddev.cl")
     args = parser.parse_args()
     try:
         {"setup": lambda: setup(args.project), "secrets": lambda: secrets(args.project, args.only),
-         "deploy": lambda: deploy(args.project, args.origin)}[args.command]()
+         "deploy": lambda: deploy(args.project)}[args.command]()
     except Step as exc:
         sys.exit(f"\nStopped: {exc}")
     except KeyboardInterrupt:

@@ -1,4 +1,4 @@
-"""The FastAPI app: JSON API for the PWA, the PWA itself, and the background sync loop.
+"""The FastAPI app: the JSON API behind the Zona iPhone app, and the background sync loop.
 
 Run locally:  uvicorn zona.main:app --env-file .env
 """
@@ -12,28 +12,23 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path as FsPath
 from typing import Annotated, Any, Literal
-from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from . import auth, fake, shapes
 from .config import Config, load_config
 from .db import Repo, Store
 from .garmin import GarminSource, LiveGarmin
-from .push import Pusher, push_endpoint_ok, push_keys_ok
+from .push import TOKEN_RE, Pusher
 from .service import Service
 from .sync import TICK_MIN, Syncer
 
 log = logging.getLogger("zona")
-WEB_DIR = FsPath(__file__).resolve().parent.parent / "web"
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-       "connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-MAX_BODY = 64 * 1024  # the largest real request is a push subscription, well under 2 KB
+MAX_BODY = 64 * 1024  # the largest real request is a plan item, well under 1 KB
 RowId = Annotated[int, Path(ge=1, le=2**53)]
 
 FakeSport = Literal["running", "strength_training", "road_biking", "lap_swimming"]
@@ -63,28 +58,8 @@ class PlanIn(BaseModel):
         return v.strip()
 
 
-class SubKeys(BaseModel):
-    p256dh: str = Field(min_length=20, max_length=200, pattern=r"^[A-Za-z0-9_\-=]+$")
-    auth: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_\-=]+$")
-
-
-class SubIn(BaseModel):
-    endpoint: str = Field(min_length=10, max_length=1000, pattern=r"^https://")
-    keys: SubKeys
-
-    @field_validator("endpoint")
-    @classmethod
-    def known_push_service(cls, v: str) -> str:
-        # The server POSTs to this URL, so only real push services: anything else would be a request-forgery hole.
-        if not push_endpoint_ok(v):
-            raise ValueError("not a known push service")
-        return v
-
-    @model_validator(mode="after")
-    def keys_decode(self) -> SubIn:
-        if not push_keys_ok(self.keys.p256dh, self.keys.auth):
-            raise ValueError("push keys don't decode to a P-256 key and a 16-byte secret")
-        return self
+class PushTokenIn(BaseModel):
+    token: str = Field(pattern=TOKEN_RE.pattern)
 
 
 class FakeWorkoutIn(BaseModel):
@@ -95,26 +70,15 @@ class FakeWorkoutIn(BaseModel):
 
 def require_session(request: Request) -> None:
     st = request.app.state
-    if not auth.session_ok(st.session_key, st.repo.state("session_epoch", 0), request.cookies.get(auth.COOKIE)):
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not auth.session_ok(st.session_key, token, lambda: st.repo.state("session_epoch", 0)):
         raise HTTPException(401, "Sign in first")
 
 
 def client_id(request: Request) -> str:
-    """Who is logging in. Firebase Hosting and Cloud Run put the client first in X-Forwarded-For. A client can
-    forge that, which only buys more attempts under a new name; LoginLimiter's global slowdown caps those."""
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    return request.headers.get("cf-connecting-ip") or forwarded or (request.client.host if request.client else "unknown")
-
-
-def same_origin(request: Request, allowed: tuple[str, ...]) -> bool:
-    """A write is ours if its Origin is this host, the host Firebase Hosting forwarded for (Cloud Run itself sees
-    *.run.app), or one of the app's configured addresses. A cross-site page can't set X-Forwarded-Host without a
-    CORS preflight, which Zona never answers, so trusting it here is safe."""
-    origin = request.headers.get("origin")
-    if not origin:
-        return True  # same-origin GETs and non-browser clients; the SameSite=Lax cookie covers browsers
-    host = urlparse(origin).netloc
-    return host in {request.headers.get("host"), request.headers.get("x-forwarded-host")} or origin in allowed
+    """Who is logging in. Cloud Run appends the real address last in X-Forwarded-For; anything before it is the client's claim."""
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
 
 
 # Module level on purpose: with postponed annotations FastAPI resolves this name from the module globals.
@@ -141,7 +105,7 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         repo = Repo(cfg.db_path, cfg.tz)
     garmin: GarminSource = source or (fake.FakeGarmin(cfg.tz, now) if cfg.fake else LiveGarmin(cfg.garmin_api_key or "", cfg.token_cache))
     service = Service(repo, cfg.tz, now)
-    push = pusher or Pusher(repo, cfg.vapid_private_key, cfg.vapid_public_key, cfg.vapid_subject)
+    push = pusher or Pusher(repo)
     syncer = Syncer(repo, garmin, service, push, now, pause_s=0 if cfg.fake else 0.5)  # pause only to be gentle with Garmin
     limiter = auth.LoginLimiter()
     if cfg.fake:
@@ -169,24 +133,20 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
 
     app = FastAPI(title="Zona", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
+    if cfg.dev_cors_origin:  # local only: lets `expo start --web` on another port call a local server
+        app.add_middleware(CORSMiddleware, allow_origins=[cfg.dev_cors_origin], allow_methods=["*"], allow_headers=["*"])
+
     @app.middleware("http")
     async def guard(request: Request, call_next: Callable) -> Response:
-        is_api = request.url.path.startswith("/api/")
-        if request.method not in ("GET", "HEAD", "OPTIONS") and is_api:
-            # Same-origin writes only. The cookie is SameSite=Lax too; this also covers same-site subdomains.
-            if not same_origin(request, cfg.origins):
-                return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
-            # Refuse big bodies before anything reads them: FastAPI parses the body before the auth check runs.
+        # Refuse big bodies before anything reads them: FastAPI parses the body before the auth check runs.
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
             length = request.headers.get("content-length")
-            if length is None and "chunked" in request.headers.get("transfer-encoding", "").lower():
+            if "chunked" in request.headers.get("transfer-encoding", "").lower():
                 return JSONResponse({"detail": "Content-Length required"}, status_code=411)
             if length is not None and (not length.isdigit() or int(length) > MAX_BODY):
                 return JSONResponse({"detail": "Request too large"}, status_code=413)
         response = await call_next(request)
-        response.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
-                                 "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY"})
-        # API data is never stored; the app shell always revalidates, so a deploy can't leave mixed JS versions behind.
-        response.headers["Cache-Control"] = "no-store" if is_api else "no-cache"
+        response.headers.update({"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
         return response
 
     app.state.session_key = auth.session_key(cfg.session_secret, cfg.password)
@@ -197,30 +157,26 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         return {"ok": True}
 
     @app.post("/api/login")
-    def login(body: LoginIn, request: Request, response: Response) -> dict:
+    def login(body: LoginIn, request: Request) -> dict:
         client = client_id(request)
         if not limiter.begin(client):
             raise HTTPException(429, "Too many wrong passwords. Try again in 15 minutes.")
-        time.sleep(limiter.global_delay_s())  # many recent failures from anywhere: slow every guess, block no one
         if not auth.password_ok(body.password, cfg.password):
             raise HTTPException(401, "Wrong password")
         limiter.succeeded(client)
-        token = auth.make_session(app.state.session_key, repo.state("session_epoch", 0))
-        response.set_cookie(auth.COOKIE, token, max_age=auth.MAX_AGE_S, httponly=True, secure=cfg.secure_cookies,
-                            samesite="lax", path="/")
-        return {"ok": True}
+        return {"token": auth.make_session(app.state.session_key, repo.state("session_epoch", 0))}
 
     @app.post("/api/logout")
-    def logout(_: Authed, response: Response) -> dict:
-        # Moving the epoch revokes every cookie issued so far, including a copied one.
+    def logout(_: Authed) -> dict:
+        # Moving the epoch revokes every token issued so far, including a copied one. Signed-out phones get no more pushes.
         repo.set_state("session_epoch", repo.state("session_epoch", 0) + 1)
-        response.delete_cookie(auth.COOKIE, path="/")
+        for token in repo.push_tokens():
+            repo.delete_push_token(token)
         return {"ok": True}
 
     @app.get("/api/me")
     def me(_: Authed) -> dict:
-        return {"ok": True, "fake": cfg.fake, "push": {"enabled": push.enabled, "public_key": cfg.vapid_public_key},
-                "devices": len(repo.subs())}
+        return {"ok": True, "fake": cfg.fake, "devices": len(repo.push_tokens())}
 
     @app.get("/api/home")
     def home(_: Authed) -> dict:
@@ -294,10 +250,10 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
             raise HTTPException(404, "No such plan item")
         return {"ok": True}
 
-    @app.post("/api/push/subscribe")
-    def subscribe(_: Authed, body: SubIn) -> dict:
-        repo.add_sub(body.endpoint, body.keys.p256dh, body.keys.auth, now())
-        return {"ok": True, "devices": len(repo.subs())}
+    @app.post("/api/push/register")
+    def register_push(_: Authed, body: PushTokenIn) -> dict:
+        repo.add_push_token(body.token, now())
+        return {"ok": True, "devices": len(repo.push_tokens())}
 
     @app.post("/api/push/test")
     def push_test(_: Authed, delay: Annotated[int, Query(ge=0, le=30)] = 0) -> dict:
@@ -309,8 +265,8 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
 
     @app.post("/internal/tick")
     async def tick(request: Request) -> dict:
-        """Cloud Scheduler calls this every 5 minutes; it replaces the in-process loop on Cloud Run. Not under /api/,
-        so Firebase Hosting doesn't route it: only the run.app URL reaches it, and only with the shared secret."""
+        """Cloud Scheduler calls this every 5 minutes; it replaces the in-process loop on Cloud Run. Only the shared
+        secret opens it."""
         given = request.headers.get("x-zona-tick", "")
         if not cfg.tick_secret or not hmac.compare_digest(given.encode(), cfg.tick_secret.encode()):
             raise HTTPException(403, "Forbidden")
@@ -336,8 +292,6 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         await asyncio.to_thread(syncer.tick, True)
         return {"nudge": service.latest_nudge(now())}
 
-    if WEB_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app
 
 

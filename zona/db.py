@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY AUTOINCREMENT, weekday INTEGER NOT NULL, start_h REAL NOT NULL, minutes INTEGER NOT NULL,
   sport TEXT NOT NULL, name TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS push_tokens (token TEXT PRIMARY KEY, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS nudges (
   id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT NOT NULL UNIQUE, created TEXT NOT NULL,
   status TEXT NOT NULL, reason TEXT, payload TEXT NOT NULL);
@@ -89,9 +89,9 @@ class Store(Protocol):
     def plan(self) -> list[PlanItem]: ...
     def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem: ...
     def delete_plan(self, plan_id: int) -> bool: ...
-    def add_sub(self, endpoint: str, p256dh: str, auth: str, now: datetime) -> None: ...
-    def subs(self) -> list[dict]: ...
-    def delete_sub(self, endpoint: str) -> None: ...
+    def add_push_token(self, token: str, now: datetime) -> None: ...
+    def push_tokens(self) -> list[str]: ...
+    def delete_push_token(self, token: str) -> None: ...
     def save_nudge(self, kind: str, key: str, now: datetime, status: str, payload: dict, reason: str | None = None) -> None: ...
     def nudge(self, key: str) -> dict | None: ...
     def nudges(self, kind: str, statuses: tuple[str, ...], since: datetime) -> list[dict]: ...
@@ -213,19 +213,18 @@ class Repo:
         with self._db() as con:
             return con.execute("DELETE FROM plan WHERE id = ?", (plan_id,)).rowcount > 0
 
-    # ---------- push subscriptions ----------
-    def add_sub(self, endpoint: str, p256dh: str, auth: str, now: datetime) -> None:
+    # ---------- push tokens ----------
+    def add_push_token(self, token: str, now: datetime) -> None:
         with self._db() as con:
-            con.execute("INSERT INTO push_subs VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
-                        (endpoint, p256dh, auth, now.isoformat()))
+            con.execute("INSERT OR IGNORE INTO push_tokens VALUES (?, ?)", (token, now.isoformat()))
 
-    def subs(self) -> list[dict]:
+    def push_tokens(self) -> list[str]:
         with self._db() as con:
-            return [dict(r) for r in con.execute("SELECT endpoint, p256dh, auth FROM push_subs")]
+            return [r["token"] for r in con.execute("SELECT token FROM push_tokens")]
 
-    def delete_sub(self, endpoint: str) -> None:
+    def delete_push_token(self, token: str) -> None:
         with self._db() as con:
-            con.execute("DELETE FROM push_subs WHERE endpoint = ?", (endpoint,))
+            con.execute("DELETE FROM push_tokens WHERE token = ?", (token,))
 
     # ---------- nudges ----------
     def save_nudge(self, kind: str, key: str, now: datetime, status: str, payload: dict, reason: str | None = None) -> None:

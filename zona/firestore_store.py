@@ -6,7 +6,7 @@ Shaped to stay well inside Firestore's free daily quota (50k reads, 20k writes):
 - every query filters on a single field, so none needs a composite index. Kind and status filters
   happen in Python over the handful of recent nudges.
 
-Collections: activities/{id}, days/{date}, water/{id}, plan/{id}, push_subs/{sha256(endpoint)},
+Collections: activities/{id}, days/{date}, water/{id}, plan/{id}, push_tokens/{sha256(token)},
 nudges/{key}, state/{key}, raw/{endpoint}, and config/settings.
 """
 
@@ -163,20 +163,19 @@ class FirestoreStore:
         ref.delete()
         return True
 
-    # ---------- push subscriptions ----------
+    # ---------- push tokens ----------
     @staticmethod
-    def _sub_id(endpoint: str) -> str:
-        return hashlib.sha256(endpoint.encode()).hexdigest()  # endpoints contain slashes, which doc ids can't
+    def _token_id(token: str) -> str:
+        return hashlib.sha256(token.encode()).hexdigest()  # tokens hold brackets; a hash makes a tidy document id
 
-    def add_sub(self, endpoint: str, p256dh: str, auth: str, now: datetime) -> None:
-        self._c("push_subs").document(self._sub_id(endpoint)).set(
-            {"endpoint": endpoint, "p256dh": p256dh, "auth": auth, "created": now.isoformat()})
+    def add_push_token(self, token: str, now: datetime) -> None:
+        self._c("push_tokens").document(self._token_id(token)).set({"token": token, "created": now.isoformat()})
 
-    def subs(self) -> list[dict]:
-        return [{k: s.get(k) for k in ("endpoint", "p256dh", "auth")} for s in self._c("push_subs").stream()]
+    def push_tokens(self) -> list[str]:
+        return [s.get("token") for s in self._c("push_tokens").stream()]
 
-    def delete_sub(self, endpoint: str) -> None:
-        self._c("push_subs").document(self._sub_id(endpoint)).delete()
+    def delete_push_token(self, token: str) -> None:
+        self._c("push_tokens").document(self._token_id(token)).delete()
 
     # ---------- nudges ----------
     def save_nudge(self, kind: str, key: str, now: datetime, status: str, payload: dict, reason: str | None = None) -> None:

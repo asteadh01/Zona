@@ -1,142 +1,189 @@
-# Putting Zona on your iPhone (Firebase)
+# Putting Zona on your iPhone
 
-From nothing to a drink nudge buzzing on your watch, in about 40 minutes. After that, a release is one command.
+Zona is a real iPhone app, built the same way as cucinIA: Expo, built in the cloud by EAS, and installed from a link. You don't need a Mac.
+
+**You've already done steps 1 to 5** with the web version. Start at **step 6**. Steps 1 to 5 stay here in case you ever rebuild the project from nothing.
 
 ## How it fits together
 
-- **Firebase Hosting** serves the app: the screens, the icon, the service worker.
-- **Cloud Run** runs Zona's server, the same container as before. It sleeps when nobody's using it.
+- **The app** (`mobile/`) runs on your iPhone. It keeps its sign-in in the iPhone's Keychain.
+- **Cloud Run** runs Zona's server. It sleeps when nobody's using it.
 - **Cloud Scheduler** wakes the server every 5 minutes, so it can check Garmin and send nudges.
 - **Firestore** holds your data.
-- **Secret Manager** holds the Garmin key, the app password and the push keys, in one secret.
+- **Secret Manager** holds the Garmin key and the app password, in one secret.
+- **Expo's push service** passes notifications to Apple, and Apple delivers them to your phone. Your watch mirrors them.
 
-**Cost:** all of this needs the **Blaze** plan, because the free Spark plan can't run any server code. One person's use stays well inside Blaze's free allowances, and you already have a Blaze billing account from cucinIA. The step-1 budget alert tells you if anything ever costs money.
+**Cost:** the Firebase side stays inside the Blaze plan's free allowances, and the step-1 budget alert tells you if it ever doesn't. The app needs your Apple Developer account, which you already pay for with cucinIA, and Expo's free plan covers the occasional build.
 
 | Step | Where | What you end up with |
 |---|---|---|
-| 1 | Firebase console | the `zona` project on Blaze, with a $1 budget alert |
-| 2 | Firestore | the database |
-| 3 | this PC | the two command-line tools, signed in |
-| 4 | Garmin Connect (web) | a new Personal API key |
-| 5 | this PC | `setup` and `secrets` done |
-| 6 | this PC | `deploy`: Zona is live at `https://YOUR-PROJECT.web.app` |
-| 7 | GitHub | the code pushed; tests run on every push |
-| 8 | iPhone | Zona on the Home Screen, with notifications on |
-| 9 | Garmin Connect app | notifications mirrored to the watch |
-| 10 | Zona | your week plan, and a check of Garmin's data |
+| 1 to 5 | Firebase, Garmin, this PC | the project, the database, the Garmin key and the secrets (done) |
+| 6 | this PC | the new server live, and the old web app switched off |
+| 7 | this PC | the Zona project on EAS |
+| 8 | this PC + iPhone | your iPhone registered, and Developer Mode on |
+| 9 | this PC | the app built |
+| 10 | iPhone | Zona installed, with notifications on |
+| 11 | Garmin Connect app | notifications mirrored to the watch |
+| 12 | Zona | your week plan, and a check of Garmin's data |
+
+**Run everything in PowerShell.** Git Bash's default window can't handle sign-in or hidden prompts properly.
 
 ---
 
-## 1. Firebase project on Blaze, with a budget alert
+## Done already: steps 1 to 5
 
-1. Go to [console.firebase.google.com](https://console.firebase.google.com) › **Add project**. Name it **zona**; Google Analytics isn't needed. Write down the **project ID** it shows, such as `zona-12ab3`. Every command below uses it.
+<details>
+<summary>Only needed if you start again from nothing</summary>
+
+### 1. Firebase project on Blaze, with a budget alert
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) › **Add project**. Name it **zona**; Google Analytics isn't needed. The project ID is `zona-624e5`; every command below uses it.
 2. Bottom left: **Spark › Upgrade** › **Blaze** › choose your **existing billing account** (the one cucinIA uses).
-3. When it offers a budget, set **$1**. If it doesn't, open [console.cloud.google.com/billing](https://console.cloud.google.com/billing) › your billing account › **Budgets & alerts › Create budget**:
-   - **Scope:** project `zona`.
-   - **Amount:** $1.
-   - **Alerts:** at 50%, 90% and 100%.
+3. When it offers a budget, set **$1**, with alerts at 50%, 90% and 100%. It's an email warning, not a spending cap.
 
-   It's an email warning, not a spending cap.
+### 2. Firestore
 
-## 2. Firestore
+In the console: **Build › Firestore Database › Create database**. Choose **Standard** edition, the `(default)` database ID, **`nam5 (United States)`**, and **production mode**.
 
-In the console: **Build › Firestore Database › Create database**.
-1. **Edition:** **Standard**, if it asks.
-2. **Database ID:** leave it as `(default)`.
-3. **Location:** **`nam5 (United States)`**. Zona's server runs in `us-central1`, which is inside that region, and both stay in the free allowance there.
-4. **Rules:** **Start in production mode**. Zona's server uses its own credentials, and every deploy also ships `firestore.rules`, which keeps all browser access closed.
+### 3. The two command-line tools
 
-## 3. The two command-line tools
+You need the Google Cloud CLI (`gcloud`). The Firebase CLI runs through `npx`. Sign both in, in `Desktop\Workspace\Zona`:
 
-You already have the Google Cloud CLI (`gcloud`). Install the Firebase CLI once, then sign both in:
-
-```bash
-npm install -g firebase-tools
+```powershell
+npx.cmd --yes firebase-tools@15 login
 ```
 
-```bash
-firebase login
-```
-
-```bash
+```powershell
 gcloud auth login
 ```
 
-Both open a browser to sign in with your Google account.
+### 4. A Garmin Personal API key
 
-## 4. A new Garmin Personal API key
+On [connect.garmin.com](https://connect.garmin.com) › **Settings › Personal API Key**, create a key that lasts **1 year**. Garmin shows it once.
 
-The key you pasted into the chat earlier should be treated as exposed. On [connect.garmin.com](https://connect.garmin.com) › **Settings › Personal API Key**:
-1. Delete the old key.
-2. Create a new one that lasts **1 year**.
-3. Keep it handy for step 5. Garmin shows it once.
+### 5. Setup and secrets
 
-## 5. Setup and secrets
-
-In a terminal in `Desktop\Workspace\Zona`, with your project ID instead of `zona-12ab3`:
-
-```bash
-.venv/Scripts/python.exe scripts/zona_cloud.py setup --project zona-12ab3
+```powershell
+.venv/Scripts/python.exe scripts/zona_cloud.py setup --project zona-624e5
 ```
 
-This turns on the seven Google services Zona uses. It creates **`zona-run`**, the account Zona's server runs as, which can use Firestore and read its one secret and nothing else. It also lets the default compute account build the image from source. It's safe to run again.
-
-```bash
-.venv/Scripts/python.exe scripts/zona_cloud.py secrets --project zona-12ab3
+```powershell
+.venv/Scripts/python.exe scripts/zona_cloud.py secrets --project zona-624e5
 ```
 
-It asks for three things:
-- **The Garmin key:** hidden as you type.
-- **An email:** Apple's push service wants a contact address, and that's the only place it goes.
-- **The app password:** 12+ characters, or press Enter to have one generated.
+It asks for the Garmin key and the app password, both hidden as you type. Press Enter at the password prompt to have one generated.
 
-It generates everything else and stores it all as **one** Secret Manager secret, so it stays inside the free tier. Nothing is written to your disk.
+</details>
 
-## 6. Deploy
+---
 
-```bash
-.venv/Scripts/python.exe scripts/zona_cloud.py deploy --project zona-12ab3
+## 6. Update the server and switch off the old web app
+
+In `Desktop\Workspace\Zona`, first clear the old web app's push keys out of the secret. It asks for the app password; type the same one again, or a new one:
+
+```powershell
+.venv/Scripts/python.exe scripts/zona_cloud.py secrets --project zona-624e5 --only ZONA_PASSWORD
 ```
 
-The first run takes about 5 minutes. It:
-1. builds the server in Google Cloud Build, so nothing builds on this PC;
-2. deploys it to Cloud Run;
-3. publishes the app and the database rules to Firebase Hosting;
-4. creates the 5-minute schedule and fires it once, which starts the first sync: 180 days of activities and 12 weeks of daily data.
+Then deploy:
 
-It ends by opening `https://zona-12ab3.web.app/health`, which should say `{"ok":true}`. A brand-new site can take a minute to answer.
-
-## 7. GitHub
-
-The repo is still empty. Make it **private** first: **Settings › General › Danger Zone › Change visibility**. Then push:
-
-```bash
-git push -u origin main
+```powershell
+.venv/Scripts/python.exe scripts/zona_cloud.py deploy --project zona-624e5
 ```
 
-GitHub runs the tests on every push, on SQLite and on the Firestore emulator. Deploying stays a command on your PC, so no cloud credentials live in GitHub.
+This takes about 5 minutes and ends with `OK: .../health answered 200`. The server now signs in with app tokens and sends notifications through Expo. **From this moment the old home-screen web app stops working**, so delete its icon from your phone.
 
-## 8. iPhone
+Then take the old site offline:
 
-1. In **Safari**, open **https://zona-12ab3.web.app** and sign in. Let Safari save the password.
-2. Tap **Share › Add to Home Screen › Add**.
-3. Open Zona **from the new icon**, not from Safari, and sign in once more. iOS keeps home-screen apps separate from Safari.
-4. Go to the **Train** tab › **Zona** card › **Turn on notifications** › **Allow**.
-5. Tap **Send a test**. "Zona is set up" should arrive within seconds.
-6. In **iPhone Settings › Notifications › Zona**, make sure **Lock Screen**, **Notification Center** and **Banners** are all on.
+```powershell
+npx.cmd --yes firebase-tools@15 hosting:disable --project zona-624e5
+```
 
-## 9. Your watch
+And delete the old web app's notification subscriptions, which nothing reads anymore. It asks you to confirm:
+
+```powershell
+npx.cmd --yes firebase-tools@15 firestore:delete push_subs --recursive --project zona-624e5
+```
+
+## 7. The Zona project on EAS
+
+Move to the app's folder. Every command from here on runs in `Desktop\Workspace\Zona\mobile`:
+
+```powershell
+cd mobile
+```
+
+```powershell
+npm install
+```
+
+Sign in with your Expo account, `asteadh01`, the same one as cucinIA:
+
+```powershell
+npx.cmd --yes eas-cli login
+```
+
+```powershell
+npx.cmd --yes eas-cli init
+```
+
+Say **yes** to creating the project `@asteadh01/zona`. This writes the project's ID into `app.json`, which notifications need, so commit that change afterwards.
+
+## 8. Your iPhone
+
+Your phone needs to be on the app's device list, and iOS needs Developer Mode on to open apps installed this way.
+
+1. Check whether your phone is already registered from cucinIA. This list should include it:
+
+   ```powershell
+   npx.cmd --yes eas-cli device:list
+   ```
+
+2. If it isn't, run this, open the link it gives you on the iPhone, and install the profile:
+
+   ```powershell
+   npx.cmd --yes eas-cli device:create
+   ```
+
+3. Turn on Developer Mode: **Settings › Privacy & Security › Developer Mode**. The phone restarts and asks you to confirm.
+
+## 9. Build the app
+
+```powershell
+npx.cmd --yes eas-cli build --profile phone --platform ios
+```
+
+Answer the prompts like this:
+
+| It asks | Answer |
+|---|---|
+| Log in to your Apple account | **Yes**, and sign in with your Apple Developer account |
+| Generate a new Distribution Certificate, or reuse one | Either is fine; reuse the one cucinIA has if it's offered |
+| Which devices to include | Your iPhone |
+| Set up Push Notifications / generate a new Apple Push Notifications key | **Yes**. Without this, notifications can't reach the phone |
+
+The build runs in Expo's cloud and takes about 15 minutes. It ends with a link and a QR code.
+
+## 10. Install it
+
+1. Open the link or scan the QR code on the iPhone, then tap **Install**. Zona appears on your Home Screen.
+2. Open Zona and sign in with the app password from step 5.
+3. Go to the **Train** tab › **Zona** card › **Turn on notifications** › **Allow**.
+4. Tap **Send a test**. "Zona is set up" should arrive within seconds.
+5. In **iPhone Settings › Notifications › Zona**, make sure **Lock Screen**, **Notification Center** and **Banners** are all on.
+
+## 11. Your watch
 
 1. Open the **Garmin Connect** app › your watch › **Notifications & Alerts › Smart Notifications** and turn them on.
-2. In Zona, go to **Train › Zona**, tap **Test the watch: send in 10 s, then lock the phone**, and lock the phone right away. The watch should buzz.
+2. In Zona, go to **Train › Zona**, tap **Test the watch: send in 10 s, then lock**, and lock the phone right away. The watch should buzz.
 
-## 10. Make it yours
+## 12. Make it yours
 
 - **Train › Every week:** add the sessions you usually do. Zona uses them for:
   - the morning call ("Go ahead with your run");
   - checking Garmin every 5 minutes right after a planned session;
   - sending one nudge for back-to-back sessions.
-- **Check Garmin's data once:** go to **Train › Zona › Garmin data shapes** and send me what it shows. It lists field names and types only, never your numbers, so it's safe to share. It confirms Zona reads calories, sleep, HRV and Body Battery from the right fields.
+- **Check Garmin's data once:** go to **Train › Zona › Garmin data shapes**, tap **Share**, and send me what it shows. It lists field names and types only, never your numbers, so it's safe to share. It confirms Zona reads calories, sleep, HRV and Body Battery from the right fields.
 
 ---
 
@@ -144,20 +191,27 @@ GitHub runs the tests on every push, on SQLite and on the Firestore emulator. De
 
 | When | Run this |
 |---|---|
-| Code changed | `scripts/zona_cloud.py deploy --project ID` |
-| Garmin key expiring, or Home shows **"Garmin key refused"** | `scripts/zona_cloud.py secrets --project ID --only GARMIN_PERSONAL_API_KEY`, then `deploy` |
+| The app changed (`mobile/`) | In `mobile`: `npx.cmd --yes eas-cli build --profile phone --platform ios`, then install from the new link. Your sign-in and data stay |
+| The server changed (`zona/`) | In `Zona`: `scripts/zona_cloud.py deploy --project zona-624e5` |
+| A new iPhone | `eas-cli device:create`, then build again |
+| The app stops opening after about a year | The Apple certificate expired. Build again; EAS offers to renew it |
+| You'd rather install through TestFlight | `eas-cli build --profile production --platform ios --auto-submit`. It needs the app created in App Store Connect first, and TestFlight builds last 90 days |
+| Garmin key expiring, or Home shows **"Garmin key refused"** | `scripts/zona_cloud.py secrets --project zona-624e5 --only GARMIN_PERSONAL_API_KEY`, then `deploy` |
 | New app password | `secrets --only ZONA_PASSWORD`, then `deploy`. Every device is signed out |
-| Your own address, e.g. `zona.steaddev.cl` | Firebase console › **Hosting › Add custom domain**. In Cloudflare DNS, add the records it gives you with the proxy **off** (grey cloud). Then `deploy --origin https://zona.steaddev.cl` |
 
 ## If something's off
 
 | Symptom | Likely cause |
 |---|---|
-| `gcloud` or `firebase` says permission denied | You're signed in as a different Google account. Run `gcloud auth login` or `firebase login` again |
-| `setup` fails enabling services | The project isn't on Blaze yet (step 1) |
-| `deploy` fails while building | `setup` wasn't run, or it ran before Blaze. Run it again. It's safe to repeat |
-| `/health` doesn't answer after a few minutes | In the Cloud Run console, open the **zona** service's **Logs**. A `ConfigError` names the bad setting |
-| Signing in works but nothing saves | You opened a `run.app` address. Use the `web.app` one, or add your custom domain with `--origin` |
+| `eas-cli` can't prompt, or says it's non-interactive | You're in Git Bash. Use PowerShell |
+| `npx` is blocked by "running scripts is disabled" | Type `npx.cmd` instead of `npx` |
+| Tapping **Install** does nothing, or the app says "Unable to Install" | Your iPhone wasn't on the list when the app was built. Do step 8, then build again |
+| The app won't open and mentions Developer Mode | Turn it on (step 8) |
+| "This build has no EAS project ID" in Zona | `eas-cli init` hadn't run before the build. Run it, then build again |
+| "Send a test" does nothing | The push key wasn't set up. Run `eas-cli credentials`, choose iOS › **Push Notifications**, add a key, and try again; no new build is needed |
+| Zona says it can't reach the server | Open the address in `eas.json` plus `/health` in Safari; it should say `{"ok":true}`. If that fails, open the **zona** service's **Logs** in the Cloud Run console. A `ConfigError` names the bad setting |
+| "Too many wrong passwords" at sign-in | Five wrong tries from your address, or a lot of wrong tries from anywhere. Wait 15 minutes. A phone that's already signed in keeps working |
 | "Sync failed" on Home | Garmin didn't answer. The next 5-minute tick retries, or tap the chip to retry now |
 | No notification arrives | iPhone Settings › Notifications › Zona, Focus modes, and in Zona, Train › Zona › devices registered |
+| `gcloud` or `firebase` says permission denied | You're signed in as a different Google account. Run `gcloud auth login` or `npx.cmd --yes firebase-tools@15 login` again |
 | A Firebase budget email arrives | Tell me what it says. Something is outside the free allowances |
