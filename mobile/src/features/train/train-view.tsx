@@ -127,7 +127,6 @@ function AppCard({ me, sync, onChanged }: AppProps) {
   return (
     <Card title="Zona" sub={me.fake ? 'sample data' : 'your Garmin'}>
       <SetRow label="Garmin sync">{SYNC_LABEL[sync.status]}</SetRow>
-      <Btn label="Sync now" kind="quiet" onPress={() => void run(async () => { await api.sync(); return 'Synced.'; })} />
       <BtnRow>
         <Btn label={me.devices ? 'Re-register' : 'Turn on notifications'} kind="ghost" onPress={() => void turnOn()} />
         <Btn label="Send a test" kind="ghost" disabled={!me.devices} onPress={() => void testNow()} />

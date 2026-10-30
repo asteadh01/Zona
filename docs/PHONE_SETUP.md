@@ -233,7 +233,7 @@ To undo a bad update, run `npx --yes eas-cli update:roll-back-to-embedded --chan
 | "Send a test" does nothing | The push key wasn't set up. Run `eas-cli credentials`, choose iOS › **Push Notifications**, add a key, and try again; no new build is needed |
 | Zona says it can't reach the server | Open `https://zona-jzdswiuy2a-uc.a.run.app/health` in Safari; it should say `{"ok":true}`. If that fails, open the **zona** service's **Logs** in the Cloud Run console. A `ConfigError` names the bad setting |
 | "Too many wrong passwords" at sign-in | Five wrong tries from your address, or a lot of wrong tries from anywhere. Wait 15 minutes. A phone that's already signed in keeps working |
-| "Sync failed" on Home | Garmin didn't answer. The next 5-minute tick retries, or tap the chip to retry now |
+| "Sync failed" on Home | Garmin didn't answer. The next 5-minute tick retries, or tap **Sync now** at the top right of Home |
 | No notification arrives | iPhone Settings › Notifications › Zona, Focus modes, and in Zona, Train › Zona › devices registered |
 | `gcloud` or `firebase` says permission denied | You're signed in as a different Google account. Run `gcloud auth login` or `npx.cmd --yes firebase-tools@15 login` again |
 | "Zona is up to date" right after publishing | The update's `version` doesn't match the installed build, or that build predates updates. Compare with **Train › Zona**, and build again if needed |

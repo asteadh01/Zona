@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -8,30 +9,52 @@ import type { SyncStatus } from '@/types/api';
 
 function syncLabel(sync: SyncStatus, nowIso: string): { text: string; good: boolean } {
   if (sync.status === 'key') return { text: 'Garmin key refused', good: false };
-  if (sync.status === 'error') return { text: 'Sync failed · retry', good: false };
+  if (sync.status === 'error') return { text: 'Sync failed', good: false };
   if (!sync.last) return { text: 'Not synced yet', good: false };
   const minutes = Math.max(0, Math.round((new Date(nowIso).getTime() - new Date(sync.last).getTime()) / 60000));
   return { text: minutes < 1 ? 'Synced just now' : minutes < 90 ? `Synced ${minutes} min ago` : `Synced ${Math.round(minutes / 60)} h ago`, good: true };
 }
 
-type ChipProps = { sync: SyncStatus; now: string; onSynced: () => void };
-
-/** The freshness dot; tapping it syncs now. */
-export function SyncChip({ sync, now, onSynced }: ChipProps) {
+/** The small button at the top right of Home. */
+export function SyncButton({ onSynced }: { onSynced: () => void }) {
   const theme = useTheme();
   const [busy, setBusy] = useState(false);
-  const { text, good } = syncLabel(sync, now);
+  const [failed, setFailed] = useState(false);
   const press = async () => {
     setBusy(true);
-    await api.sync().catch(() => undefined);
+    try {
+      await api.sync();
+      setFailed(false);
+    } catch {
+      setFailed(true); // the status line only knows what the server last managed, and this never reached it
+    }
     setBusy(false);
     onSynced();
   };
+  const label = busy ? 'Syncing…' : failed ? 'Try again' : 'Sync now';
   return (
-    <Pressable style={styles.chip} onPress={() => void press()} disabled={busy} hitSlop={10} accessibilityRole="button" accessibilityLabel={`${text}. Sync now`}>
-      <View style={[styles.dot, { backgroundColor: good ? theme.good : theme.critical }]} />
-      <Text style={[styles.text, { color: theme.ink2 }]}>{busy ? 'Syncing…' : text}</Text>
+    <Pressable style={({ pressed }) => [styles.button, { backgroundColor: theme.surface2 }, (pressed || busy) && styles.dim]}
+      onPress={() => void press()} disabled={busy} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ busy }}>
+      <Ionicons name="refresh" size={13} color={theme.ink} />
+      <Text style={[styles.buttonText, { color: theme.ink }]}>{label}</Text>
     </Pressable>
+  );
+}
+
+type ChipProps = { sync: SyncStatus; now: string; onSynced: () => void };
+
+/** The button, with how fresh the data is underneath. */
+export function SyncChip({ sync, now, onSynced }: ChipProps) {
+  const theme = useTheme();
+  const { text, good } = syncLabel(sync, now);
+  return (
+    <View style={styles.chip}>
+      <SyncButton onSynced={onSynced} />
+      <View style={styles.status}>
+        <View style={[styles.dot, { backgroundColor: good ? theme.good : theme.critical }]} />
+        <Text style={[styles.text, { color: theme.ink2 }]}>{text}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -46,7 +69,11 @@ export function SyncBanner({ sync }: { sync: SyncStatus }) {
 }
 
 const styles = StyleSheet.create({
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingBottom: 6, minHeight: 28 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  text: { fontSize: 12 },
+  chip: { alignItems: 'flex-end', gap: 5, paddingBottom: 4 },
+  button: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 32, paddingHorizontal: 11, borderRadius: 16 },
+  buttonText: { fontSize: 12.5, fontWeight: '600' },
+  dim: { opacity: 0.6 },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dot: { width: 7, height: 7, borderRadius: 3.5 },
+  text: { fontSize: 11.5 },
 });
