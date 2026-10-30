@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { Btn, BtnRow, Card, Lead, Note, Seg, SetRow, SportChip } from '@/components/ui';
+import { Btn, BtnRow, Card, Done, Lead, MultiSeg, Note, Seg, SetRow, SportChip } from '@/components/ui';
 import { SPORT_LABEL, SPORT_ORDER, type Sport, type Theme, useTheme } from '@/constants/theme';
 import { api } from '@/services/api';
 import { appVersionLabel, installLatestUpdate } from '@/services/app-updates';
@@ -11,6 +11,7 @@ import { useAuthStore } from '@/store/auth-store';
 import type { Me, PlanItem, SyncStatus } from '@/types/api';
 import { WEEK_ROWS, dur, hhmm, parseTime } from '@/utils/format';
 
+const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const SYNC_LABEL: Record<SyncStatus['status'], string> = { ok: 'working', key: 'key refused', error: 'last try failed', never: 'not yet' };
 
 type PlanProps = { plan: PlanItem[]; onChanged: () => void };
@@ -31,7 +32,7 @@ function WeekPlan({ plan, onChanged }: PlanProps) {
                 <SportChip sport={p.sport} />
                 <View style={styles.flex}>
                   <Text style={[styles.itemName, { color: theme.ink }]}>{p.name}</Text>
-                  <Text style={[styles.itemSub, { color: theme.muted }]}>{`${hhmm(p.start_h)} · ${dur(p.minutes)}`}</Text>
+                  <Text style={[styles.itemSub, { color: theme.muted }]}>{`${p.start_h === null ? 'Maybe, no set time' : hhmm(p.start_h)} · ${dur(p.minutes)}`}</Text>
                 </View>
                 <Btn label="Remove" kind="quiet" onPress={() => void api.deletePlan(p.id).then(onChanged)} />
               </View>
@@ -43,49 +44,70 @@ function WeekPlan({ plan, onChanged }: PlanProps) {
   );
 }
 
+const DAY_OPTIONS = WEEK_ROWS.map((label, value) => ({ value, label, fullName: FULL_DAYS[value] }));
+const TIMING = [{ value: 'set', label: 'At a set time' }, { value: 'open', label: 'No set time' }] as const;
+
 function AddSession({ onChanged }: { onChanged: () => void }) {
   const theme = useTheme();
-  const [weekday, setWeekday] = useState(0);
-  const [start, setStart] = useState('07:00');
+  const [days, setDays] = useState<number[]>([]);
+  const [timing, setTiming] = useState<'set' | 'open'>('set');
+  const [start, setStart] = useState('18:00');
   const [minutes, setMinutes] = useState('45');
   const [sport, setSport] = useState<Sport>('run');
-  const [name, setName] = useState('Easy run');
+  const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
   const input = inputStyle(theme);
+  const toggleDay = (day: number) => {
+    setAdded(null);
+    setDays((now) => (now.includes(day) ? now.filter((d) => d !== day) : [...now, day].sort((a, b) => a - b)));
+  };
   const add = async () => {
     const hours = parseTime(start);
     const length = Number(minutes);
-    if (hours == null) return setError('Starts needs a time like 07:00.');
+    setAdded(null);
+    if (!days.length) return setError('Pick at least one day.');
+    if (timing === 'set' && hours == null) return setError('Starts needs a time like 18:00 or 6pm.');
     if (!Number.isInteger(length) || length < 5 || length > 600) return setError('Minutes needs a number from 5 to 600.');
-    if (!name.trim()) return setError('Give the session a name.');
-    const [h, m] = start.trim().split(':');
     try {
-      await api.addPlan({ weekday, start: `${h.padStart(2, '0')}:${m}`, minutes: length, sport, name: name.trim() });
+      await api.addPlan({ weekdays: days, start: timing === 'set' ? hhmm(hours as number) : null, minutes: length, sport, name: name.trim() || SPORT_LABEL[sport] });
       setError(null);
+      setAdded(`Added to ${days.length} day${days.length === 1 ? '' : 's'}.`);
+      setDays([]);
+      setName('');
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't add that.");
     }
   };
   return (
-    <Card title="Add a session">
-      <Seg label="Day" value={weekday} onChange={setWeekday} options={WEEK_ROWS.map((label, value) => ({ value, label: label[0] }))} />
+    <Card title="Add a session" sub="pick as many days as you like">
+      <MultiSeg label="Days" options={DAY_OPTIONS} values={days} onToggle={toggleDay} />
+      <BtnRow>
+        <Btn label="Mon to Fri" kind="quiet" onPress={() => setDays([0, 1, 2, 3, 4])} />
+        <Btn label="Clear" kind="quiet" disabled={!days.length} onPress={() => setDays([])} />
+      </BtnRow>
       <Seg label="Sport" value={sport} onChange={setSport} options={SPORT_ORDER.map((value) => ({ value, label: value === 'strength' ? 'Gym' : SPORT_LABEL[value] }))} />
+      <Seg label="When" value={timing} onChange={setTiming} options={TIMING} />
       <View style={styles.fields}>
-        <View style={styles.flex}>
-          <Text style={[styles.fieldLabel, { color: theme.muted }]}>Starts</Text>
-          <TextInput style={input} value={start} onChangeText={setStart} keyboardType="numbers-and-punctuation" accessibilityLabel="Start time" placeholder="07:00" placeholderTextColor={theme.muted} />
-        </View>
+        {timing === 'set' ? (
+          <View style={styles.flex}>
+            <Text style={[styles.fieldLabel, { color: theme.muted }]}>Starts</Text>
+            <TextInput style={input} value={start} onChangeText={setStart} keyboardType="numbers-and-punctuation" autoCapitalize="none" accessibilityLabel="Start time" placeholder="18:00 or 6pm" placeholderTextColor={theme.muted} />
+          </View>
+        ) : null}
         <View style={styles.flex}>
           <Text style={[styles.fieldLabel, { color: theme.muted }]}>Minutes</Text>
           <TextInput style={input} value={minutes} onChangeText={setMinutes} keyboardType="number-pad" accessibilityLabel="Minutes" />
         </View>
       </View>
+      {timing === 'open' ? <Note>For a session that may not happen. It shows as a maybe that day and the daily call can name it, but it only raises your water goal if it syncs from Garmin.</Note> : null}
       <View>
         <Text style={[styles.fieldLabel, { color: theme.muted }]}>Name</Text>
-        <TextInput style={input} value={name} onChangeText={setName} maxLength={60} accessibilityLabel="Session name" />
+        <TextInput style={input} value={name} onChangeText={setName} maxLength={60} accessibilityLabel="Session name" placeholder={SPORT_LABEL[sport]} placeholderTextColor={theme.muted} />
       </View>
       {error ? <Text style={{ color: theme.badInk, fontSize: 13 }} accessibilityRole="alert">{error}</Text> : null}
+      {added ? <Done>{added}</Done> : null}
       <Btn label="Add to the week" onPress={() => void add()} />
       <Note>Building workouts and sending them to your watch comes in the next version.</Note>
     </Card>

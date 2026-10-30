@@ -179,7 +179,7 @@ The build runs in Expo's cloud and takes about 15 minutes. It ends with a link a
 
 ## 12. Make it yours
 
-- **Train › Every week:** add the sessions you usually do. Zona uses them for:
+- **Train › Every week:** add the sessions you usually do. You can pick several days at once, and type the time as `18:00` or `6pm`. Choose **No set time** for a session that may not happen: it shows as a maybe that day, and the daily call can name it, but it changes no timing below and only raises your water goal if it syncs. Sessions with a set time are what Zona uses for:
   - the morning call ("Go ahead with your run");
   - checking Garmin every 5 minutes right after a planned session;
   - sending one nudge for back-to-back sessions.

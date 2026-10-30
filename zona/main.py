@@ -44,8 +44,8 @@ class WaterIn(BaseModel):
 
 
 class PlanIn(BaseModel):
-    weekday: int = Field(ge=0, le=6)
-    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    weekdays: list[Annotated[int, Field(ge=0, le=6)]] = Field(min_length=1, max_length=7)
+    start: str | None = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # None: no set time
     minutes: int = Field(ge=5, le=600)
     sport: Literal["run", "bike", "strength", "swim", "other"]
     name: str = Field(min_length=1, max_length=60)
@@ -240,9 +240,12 @@ def create_app(config: Config | None = None, *, source: GarminSource | None = No
         return [p.to_json() for p in repo.plan()]
 
     @app.post("/api/plan")
-    def add_plan(_: Authed, body: PlanIn) -> dict:
-        h, m = (int(x) for x in body.start.split(":"))
-        return repo.add_plan(body.weekday, h + m / 60, body.minutes, body.sport, body.name).to_json()
+    def add_plan(_: Authed, body: PlanIn) -> list[dict]:
+        start_h = None
+        if body.start is not None:
+            h, m = (int(x) for x in body.start.split(":"))
+            start_h = h + m / 60
+        return [repo.add_plan(day, start_h, body.minutes, body.sport, body.name).to_json() for day in sorted(set(body.weekdays))]
 
     @app.delete("/api/plan/{plan_id}")
     def delete_plan(_: Authed, plan_id: RowId) -> dict:

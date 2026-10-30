@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS water (
 CREATE INDEX IF NOT EXISTS water_date ON water(date);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plan (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, weekday INTEGER NOT NULL, start_h REAL NOT NULL, minutes INTEGER NOT NULL,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, weekday INTEGER NOT NULL, start_h REAL, minutes INTEGER NOT NULL,
   sport TEXT NOT NULL, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS push_tokens (token TEXT PRIMARY KEY, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS nudges (
@@ -67,8 +67,9 @@ def merged_settings(current: dict[str, Any], patch: dict[str, Any]) -> dict[str,
     return merged
 
 
-def check_plan_item(weekday: int, start_h: float, minutes: int, sport: str, name: str) -> None:
-    if not (0 <= weekday <= 6 and 0 <= start_h < 24 and 5 <= minutes <= 600 and sport in SPORTS and 0 < len(name) <= 60):
+def check_plan_item(weekday: int, start_h: float | None, minutes: int, sport: str, name: str) -> None:
+    good_start = start_h is None or 0 <= start_h < 24
+    if not (0 <= weekday <= 6 and good_start and 5 <= minutes <= 600 and sport in SPORTS and 0 < len(name) <= 60):
         raise ValueError("Invalid plan item")
 
 
@@ -87,7 +88,7 @@ class Store(Protocol):
     def settings(self) -> dict[str, Any]: ...
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]: ...
     def plan(self) -> list[PlanItem]: ...
-    def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem: ...
+    def add_plan(self, weekday: int, start_h: float | None, minutes: int, sport: str, name: str) -> PlanItem: ...
     def delete_plan(self, plan_id: int) -> bool: ...
     def add_push_token(self, token: str, now: datetime) -> None: ...
     def push_tokens(self) -> list[str]: ...
@@ -108,6 +109,17 @@ class Repo:
         with self._db() as con:
             con.execute("PRAGMA journal_mode=WAL")
             con.executescript(SCHEMA)
+            self._let_plan_times_be_empty(con)
+
+    @staticmethod
+    def _let_plan_times_be_empty(con: sqlite3.Connection) -> None:
+        """Databases made before sessions could have no set time have start_h NOT NULL, which SQLite can't alter in place."""
+        start_h = next(c for c in con.execute("PRAGMA table_info(plan)") if c["name"] == "start_h")
+        if start_h["notnull"]:
+            con.execute("ALTER TABLE plan RENAME TO plan_old")
+            con.executescript(SCHEMA)
+            con.execute("INSERT INTO plan SELECT * FROM plan_old")
+            con.execute("DROP TABLE plan_old")
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -199,10 +211,10 @@ class Repo:
     # ---------- weekly plan ----------
     def plan(self) -> list[PlanItem]:
         with self._db() as con:
-            rows = con.execute("SELECT * FROM plan ORDER BY weekday, start_h").fetchall()
+            rows = con.execute("SELECT * FROM plan ORDER BY weekday, start_h IS NULL, start_h").fetchall()
         return [PlanItem(**dict(r)) for r in rows]
 
-    def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem:
+    def add_plan(self, weekday: int, start_h: float | None, minutes: int, sport: str, name: str) -> PlanItem:
         check_plan_item(weekday, start_h, minutes, sport, name)
         with self._db() as con:
             cur = con.execute("INSERT INTO plan (weekday, start_h, minutes, sport, name) VALUES (?, ?, ?, ?, ?)",

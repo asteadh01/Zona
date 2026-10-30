@@ -148,9 +148,9 @@ class FirestoreStore:
     # ---------- weekly plan ----------
     def plan(self) -> list[PlanItem]:
         rows = [s.to_dict() for s in self._c("plan").stream()]
-        return [PlanItem(**r) for r in sorted(rows, key=lambda r: (r["weekday"], r["start_h"]))]
+        return [PlanItem(**r) for r in sorted(rows, key=lambda r: (r["weekday"], r["start_h"] is None, r["start_h"] or 0))]
 
-    def add_plan(self, weekday: int, start_h: float, minutes: int, sport: str, name: str) -> PlanItem:
+    def add_plan(self, weekday: int, start_h: float | None, minutes: int, sport: str, name: str) -> PlanItem:
         check_plan_item(weekday, start_h, minutes, sport, name)
         item = PlanItem(new_id(), weekday, start_h, minutes, sport, name)
         self._c("plan").document(str(item.id)).set(item.to_json())

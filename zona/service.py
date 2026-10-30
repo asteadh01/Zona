@@ -23,8 +23,15 @@ class Service:
 
     # ---------- plan, water, call ----------
     def plan_on(self, d: date) -> list[tuple[datetime, PlanItem]]:
+        """Sessions with a set time. Polling, holds, pauses and early water all hang off these, so a maybe touches none of them."""
         midnight = datetime.combine(d, datetime.min.time(), self.tz)
-        return [(midnight + timedelta(hours=p.start_h), p) for p in self.repo.plan() if p.weekday == d.weekday()]
+        return [(midnight + timedelta(hours=p.start_h), p) for p in self.repo.plan()
+                if p.weekday == d.weekday() and p.start_h is not None]
+
+    def maybes_on(self, d: date) -> list[PlanItem]:
+        """Sessions with no set time, until that sport happens that day."""
+        done = {a.sport for a in self.repo.activities_between(d.isoformat(), d.isoformat())}
+        return [p for p in self.repo.plan() if p.weekday == d.weekday() and p.start_h is None and p.sport not in done]
 
     def water_day(self, d: date, now: datetime) -> WaterDay:
         s = self.repo.settings()
@@ -42,7 +49,7 @@ class Service:
         today = days.get(d.isoformat())
         if today is None or today.bb_wake is None:
             return None
-        ahead = [p for start, p in self.plan_on(d) if start > now]
+        ahead = [p for start, p in self.plan_on(d) if start > now] + self.maybes_on(d)
         return rules.daily_call(bb=today.bb_wake, sleep_score=today.sleep_score, hrv_low=insights.hrv_is_low(days),
                                 rule=self.repo.settings()["call_rule"], next_session=ahead[0].name if ahead else None)
 
@@ -58,6 +65,7 @@ class Service:
         acts = self.repo.activities_between((today - timedelta(days=1)).isoformat(), today.isoformat())
         later = [{"start_h": p.start_h, "minutes": p.minutes, "sport": p.sport, "name": p.name}
                  for start, p in self.plan_on(today) if start > now]
+        maybes = [{"minutes": p.minutes, "sport": p.sport, "name": p.name} for p in self.maybes_on(today)]
 
         def act(a: Activity) -> dict:
             out = a.to_json()
@@ -79,7 +87,7 @@ class Service:
             "day": day.to_json() if day else None,
             "intensity_week": round(sum(d.intensity_min or 0 for d in days.values())),
             "sessions": {"today": [act(a) for a in reversed(acts) if a.date == today.isoformat()],
-                         "yesterday": [act(a) for a in reversed(acts) if a.date != today.isoformat()], "later": later},
+                         "yesterday": [act(a) for a in reversed(acts) if a.date != today.isoformat()], "later": later, "maybe": maybes},
             "week": week, "water": self.water_view(today, now), "settings": s,
         }
 

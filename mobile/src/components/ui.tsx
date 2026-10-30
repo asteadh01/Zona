@@ -114,6 +114,31 @@ export function Seg<T extends string | number>({ options, value, onChange, label
   );
 }
 
+type MultiSegProps<T extends string | number> = {
+  options: readonly { value: T; label: string; fullName: string }[];
+  values: readonly T[];
+  onToggle: (value: T) => void;
+  label: string;
+};
+/** Like Seg, for picking several. The strong fill says these are choices you can stack. */
+export function MultiSeg<T extends string | number>({ options, values, onToggle, label }: MultiSegProps<T>) {
+  const s = useStyles();
+  const theme = useTheme();
+  return (
+    <View style={s.seg} accessibilityLabel={label}>
+      {options.map((o) => {
+        const on = values.includes(o.value);
+        return (
+          <Pressable key={String(o.value)} style={[s.segItem, s.multiItem, on && { backgroundColor: theme.accent }]} onPress={() => onToggle(o.value)} hitSlop={4}
+            accessibilityRole="checkbox" accessibilityLabel={o.fullName} accessibilityState={{ checked: on }}>
+            <Text style={[s.segText, on && s.multiTextOn]} numberOfLines={1}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 type BtnProps = { label: string; onPress: () => void; kind?: 'primary' | 'ghost' | 'quiet'; disabled?: boolean };
 export function Btn({ label, onPress, kind = 'primary', disabled = false }: BtnProps) {
   const s = useStyles();
@@ -232,6 +257,8 @@ function makeStyles(t: Theme) {
     segItemOn: { backgroundColor: t.surface, shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
     segText: { fontSize: 13, fontWeight: '600', color: t.ink2 },
     segTextOn: { color: t.ink },
+    multiItem: { paddingVertical: 10, paddingHorizontal: 0 },
+    multiTextOn: { color: '#fff' },
     btn: { minHeight: 44, borderRadius: 12, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
     btnText: { fontSize: 15, fontWeight: '600', textAlign: 'center' },
     btnPrimary: { backgroundColor: t.accent },

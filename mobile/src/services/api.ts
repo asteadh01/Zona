@@ -41,8 +41,8 @@ export const api = {
   nudge: (key: string) => request<Nudge>(`/api/nudge?key=${encodeURIComponent(key)}`),
   saveSettings: (patch: Partial<Settings>) => request<Settings>('/api/settings', { method: 'PUT', body: patch }),
   plan: () => request<PlanItem[]>('/api/plan'),
-  addPlan: (item: { weekday: number; start: string; minutes: number; sport: string; name: string }) =>
-    request<PlanItem>('/api/plan', { method: 'POST', body: item }),
+  addPlan: (item: { weekdays: number[]; start: string | null; minutes: number; sport: string; name: string }) =>
+    request<PlanItem[]>('/api/plan', { method: 'POST', body: item }),
   deletePlan: (id: number) => request('/api/plan/' + id, { method: 'DELETE' }),
   registerPush: (token: string) => request<{ devices: number }>('/api/push/register', { method: 'POST', body: { token } }),
   testPush: (delay = 0) => request<{ sent: number }>(`/api/push/test?delay=${delay}`, { method: 'POST' }),

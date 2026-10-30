@@ -5,10 +5,10 @@ import { BatteryGauge, Bars, type Bar } from '@/components/charts';
 import { Card, Lead, Meter, Note, Pill, SportChip, useStyles } from '@/components/ui';
 import { type Theme, ZONE_NAMES, useTheme, zoneColors } from '@/constants/theme';
 import { NudgeCard } from '@/features/water/nudge-card';
-import type { Activity, Call, Day, Home, PlannedSession } from '@/types/api';
+import type { Activity, Call, Day, Home, MaybeSession, PlannedSession } from '@/types/api';
 import { DOW, dur, fmtDay, fromKey, hhmm, litres, nf, pace } from '@/utils/format';
 
-export function CallCard({ call, next }: { call: Call | null; next: PlannedSession | null }) {
+export function CallCard({ call, next, maybe }: { call: Call | null; next: PlannedSession | null; maybe?: MaybeSession }) {
   const s = useStyles();
   const local = useLocal();
   if (!call) {
@@ -18,8 +18,9 @@ export function CallCard({ call, next }: { call: Call | null; next: PlannedSessi
       </Card>
     );
   }
+  const ahead = next ? `${next.name} at ${hhmm(next.start_h)}` : maybe ? `maybe ${maybe.name}` : 'nothing else planned';
   return (
-    <Card title="Today's call" sub={next ? `${next.name} at ${hhmm(next.start_h)}` : 'nothing else planned'}>
+    <Card title="Today's call" sub={ahead}>
       <Pill tone={call.tone} label={call.label} />
       <Text style={local.callText}>{call.text}</Text>
       <Lead>{call.sub}</Lead>
@@ -115,7 +116,7 @@ function ZoneBar({ zones }: { zones: number[] }) {
 
 function Sessions({ home }: { home: Home }) {
   const local = useLocal();
-  const { today, yesterday, later } = home.sessions;
+  const { today, yesterday, later, maybe } = home.sessions;
   const newest = today[0] ?? yesterday[0];
   const [picked, setPicked] = useState<string | null | undefined>(undefined); // undefined: the newest stays open
   const open = picked === undefined ? newest?.id : picked;
@@ -166,8 +167,18 @@ function Sessions({ home }: { home: Home }) {
           <Text style={local.rowEnd}>{hhmm(p.start_h)}</Text>
         </View>
       ))}
+      {maybe.map((p) => (
+        <View key={p.name + p.sport} style={local.row}>
+          <SportChip sport={p.sport} />
+          <View style={local.rowMiddle}>
+            <Text style={local.rowPlanned}>{p.name}</Text>
+            <Text style={local.rowSub}>{`maybe · ${dur(p.minutes)}`}</Text>
+          </View>
+          <Text style={local.rowEnd}>no set time</Text>
+        </View>
+      ))}
       {today.map(row)}
-      {today.length + later.length === 0 ? <Note>Nothing yet today.</Note> : null}
+      {today.length + later.length + maybe.length === 0 ? <Note>Nothing yet today.</Note> : null}
       <Text style={local.dayHead}>{`YESTERDAY · ${DOW[yesterdayDate.getDay()].toUpperCase()} ${yesterdayDate.getDate()}`}</Text>
       {yesterday.map(row)}
       {yesterday.length === 0 ? <Note>Rest day.</Note> : null}
@@ -198,7 +209,7 @@ export function TodayView({ home, onChanged }: { home: Home; onChanged: () => vo
   return (
     <>
       <NudgeCard nudge={home.water.latest_nudge} logs={home.water.logs} onLogged={onChanged} />
-      <CallCard call={home.call} next={home.next} />
+      <CallCard call={home.call} next={home.next} maybe={home.sessions.maybe[0]} />
       <Tiles day={home.day} home={home} />
       <Sessions home={home} />
       <WeekCard home={home} />

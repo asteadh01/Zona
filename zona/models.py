@@ -65,11 +65,11 @@ class Day:
 
 @dataclass(frozen=True)
 class PlanItem:
-    """A session in the weekly plan. weekday: 0 = Monday."""
+    """A session in the weekly plan. weekday: 0 = Monday. No start_h: you may or may not do it, at no set time."""
 
     id: int
     weekday: int
-    start_h: float
+    start_h: float | None
     minutes: int
     sport: str
     name: str

@@ -40,6 +40,17 @@ describe('format', () => {
     expect(parseTime('7.30')).toBeNull();
   });
 
+  test('parseTime also takes am and pm', () => {
+    expect(parseTime('6pm')).toBe(18);
+    expect(parseTime('6am')).toBe(6);
+    expect(parseTime('6:30 PM')).toBe(18.5);
+    expect(parseTime('12am')).toBe(0);
+    expect(parseTime('12pm')).toBe(12);
+    expect(parseTime('13pm')).toBeNull();
+    expect(parseTime('0am')).toBeNull();
+    expect(parseTime('6')).toBeNull();
+  });
+
   test('ticks start at zero and reach the maximum', () => {
     expect(ticksFor(1500)).toEqual([0, 500, 1000, 1500]);
     expect(ticksFor(0)[0]).toBe(0);

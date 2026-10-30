@@ -52,9 +52,12 @@ export function pace(minutes: number, km: number): string {
   return `${m}:${String(s === 60 ? 59 : s).padStart(2, '0')}`;
 }
 
-/** "07:30" to 7.5, or null if it isn't a real time of day. */
+/** "07:30" or "6:30pm" to hours, or null if it isn't a real time of day. */
 export function parseTime(text: string): number | null {
-  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(text.trim());
+  const clean = text.trim().toLowerCase();
+  const twelve = /^(0?[1-9]|1[0-2])(?::([0-5]\d))?\s*([ap])m$/.exec(clean);
+  if (twelve) return (Number(twelve[1]) % 12) + (twelve[3] === 'p' ? 12 : 0) + Number(twelve[2] ?? 0) / 60;
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(clean);
   return match ? Number(match[1]) + Number(match[2]) / 60 : null;
 }
 

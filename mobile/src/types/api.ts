@@ -10,6 +10,7 @@ export type Activity = {
 };
 
 export type PlannedSession = { start_h: number; minutes: number; sport: string; name: string };
+export type MaybeSession = { minutes: number; sport: string; name: string };
 
 export type Day = {
   date: string; total_kcal: number | null; active_kcal: number | null; resting_kcal: number | null; steps: number | null;
@@ -36,7 +37,7 @@ export type Settings = {
 
 export type Home = {
   now: string; date: string; now_h: number; sync: SyncStatus; call: Call | null; next: PlannedSession | null; day: Day | null;
-  intensity_week: number; sessions: { today: Activity[]; yesterday: Activity[]; later: PlannedSession[] };
+  intensity_week: number; sessions: { today: Activity[]; yesterday: Activity[]; later: PlannedSession[]; maybe: MaybeSession[] };
   week: { date: string; active_kcal: number | null; future: boolean }[]; water: Water; settings: Settings;
 };
 
@@ -63,5 +64,5 @@ export type Insights =
       hrv: { points: { date: string; ms: number }[]; low: number; high: number; week: number; status: string } | null;
     };
 
-export type PlanItem = { id: number; weekday: number; start_h: number; minutes: number; sport: string; name: string };
+export type PlanItem = { id: number; weekday: number; start_h: number | null; minutes: number; sport: string; name: string };
 export type Me = { ok: boolean; fake: boolean; devices: number };

@@ -32,6 +32,49 @@ def test_days_stored_before_a_mapping_change_are_read_again_once(syncer, fake, r
     assert min(asked) == today - timedelta(days=6)
 
 
+def test_a_session_with_no_set_time_changes_no_timing(syncer, fake, repo, service, pusher, clock):
+    syncer.tick()
+    repo.update_settings({"count_planned": True})
+    goal = service.water_day(clock().date(), clock()).goal
+    repo.add_plan(1, None, 45, "run", "Maybe run")  # Tuesday, today
+    # No water up front: it may not happen.
+    assert service.water_day(clock().date(), clock()).goal == goal
+    # No fast polling and no hold: the nudge for another session goes straight out.
+    syncer.tick(force=True)
+    assert datetime.fromisoformat(repo.state("next_poll")) - clock() == timedelta(minutes=30)
+    fake.finish_workout("strength_training", "Strength", 50)
+    syncer.tick(force=True)
+    assert pusher.titles()[-1] == "Strength done · 50 min"
+
+
+def test_home_offers_a_maybe_session_until_that_sport_happens(syncer, fake, repo, service, clock):
+    syncer.tick()
+    repo.add_plan(1, None, 45, "swim", "Maybe swim")
+    home = service.home(clock())
+    assert [p["name"] for p in home["sessions"]["maybe"]] == ["Maybe swim"]
+    assert home["next"] is None or home["next"]["name"] != "Maybe swim"
+    assert home["sessions"]["later"] == [] or all(p["name"] != "Maybe swim" for p in home["sessions"]["later"])
+
+    fake.finish_workout("lap_swimming", "Afternoon swim", 40)
+    syncer.tick(force=True)
+    assert service.home(clock())["sessions"]["maybe"] == []
+
+
+def test_a_maybe_session_on_another_day_stays_off_todays_home(syncer, repo, service, clock):
+    syncer.tick()
+    repo.add_plan(4, None, 45, "run", "Friday maybe")  # today is Tuesday
+    assert service.home(clock())["sessions"]["maybe"] == []
+
+
+def test_the_daily_call_names_a_maybe_session_when_nothing_timed_is_ahead(syncer, repo, service, clock):
+    syncer.tick()
+    for item in repo.plan():
+        repo.delete_plan(item.id)
+    repo.add_plan(1, None, 45, "swim", "Swim")
+    call = service.call_for(clock().date(), clock())
+    assert call is not None and "swim" in call.text
+
+
 def test_next_poll_follows_the_plan(syncer, repo, clock):
     repo.add_plan(1, 13.5, 45, "run", "Lunch run")  # Tuesday 13:30, so 14:20 is inside the fast window
     syncer.tick()

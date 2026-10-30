@@ -140,20 +140,50 @@ def test_settings_validation(client):
 
 def test_bad_ids_names_and_months_are_422_not_500(client):
     login(client)
-    assert client.post("/api/plan", json={"weekday": 1, "start": "07:00", "minutes": 30, "sport": "run", "name": "   "}).status_code == 422
+    assert client.post("/api/plan", json={"weekdays": [1], "start": "07:00", "minutes": 30, "sport": "run", "name": "   "}).status_code == 422
     assert client.get("/api/month", params={"m": "0000-01"}).status_code == 422
     assert client.get("/api/month", params={"m": "9999-12"}).status_code == 422
     assert client.delete(f"/api/water/{10 ** 30}").status_code == 422
     assert client.delete("/api/plan/0").status_code == 422
 
 
+def test_one_session_can_go_on_many_days_at_once(client):
+    login(client)
+    body = {"weekdays": [0, 1, 2, 3, 4], "start": "18:00", "minutes": 60, "sport": "strength", "name": "CrossFit"}
+    added = client.post("/api/plan", json=body).json()
+    assert [(p["weekday"], p["start_h"], p["name"]) for p in added] == [(d, 18.0, "CrossFit") for d in range(5)]
+    assert sum(p["name"] == "CrossFit" for p in client.get("/api/plan").json()) == 5
+
+
+def test_repeating_a_day_adds_it_once(client):
+    login(client)
+    added = client.post("/api/plan", json={"weekdays": [3, 1, 3], "start": "06:00", "minutes": 45, "sport": "swim", "name": "Swim"}).json()
+    assert [p["weekday"] for p in added] == [1, 3]
+
+
+@pytest.mark.parametrize("weekdays", [[], [7], [-1], list(range(8))])
+def test_bad_day_lists_are_refused(client, weekdays):
+    login(client)
+    body = {"weekdays": weekdays, "start": "06:00", "minutes": 45, "sport": "swim", "name": "Swim"}
+    assert client.post("/api/plan", json=body).status_code == 422
+
+
+def test_a_session_can_have_no_set_time(client):
+    login(client)
+    added = client.post("/api/plan", json={"weekdays": [5], "start": None, "minutes": 40, "sport": "run", "name": "Maybe run"}).json()
+    assert added[0]["start_h"] is None
+    saturday = [p for p in client.get("/api/plan").json() if p["weekday"] == 5]
+    assert saturday[-1]["name"] == "Maybe run", "sessions with no set time come after the timed ones"
+    assert client.delete(f"/api/plan/{added[0]['id']}").json() == {"ok": True}
+
+
 def test_plan_crud(client):
     login(client)
     n = len(client.get("/api/plan").json())  # fake mode seeds a week plan
     assert n >= 7
-    item = client.post("/api/plan", json={"weekday": 2, "start": "18:30", "minutes": 40, "sport": "swim", "name": "Swim"}).json()
+    item = client.post("/api/plan", json={"weekdays": [2], "start": "18:30", "minutes": 40, "sport": "swim", "name": "Swim"}).json()[0]
     assert item["start_h"] == 18.5
-    assert client.post("/api/plan", json={"weekday": 9, "start": "25:00", "minutes": 40, "sport": "x", "name": ""}).status_code == 422
+    assert client.post("/api/plan", json={"weekdays": [9], "start": "25:00", "minutes": 40, "sport": "x", "name": ""}).status_code == 422
     assert client.delete(f"/api/plan/{item['id']}").json() == {"ok": True}
     assert len(client.get("/api/plan").json()) == n
 
