@@ -79,7 +79,7 @@ In a terminal in `Desktop\Workspace\Zona`, with your project ID instead of `zona
 .venv/Scripts/python.exe scripts/zona_cloud.py setup --project zona-12ab3
 ```
 
-This turns on the six Google services Zona uses. It also lets Zona's server read and write Firestore and build its image from source.
+This turns on the seven Google services Zona uses. It creates **`zona-run`**, the account Zona's server runs as, which can use Firestore and read its one secret and nothing else. It also lets the default compute account build the image from source. It's safe to run again.
 
 ```bash
 .venv/Scripts/python.exe scripts/zona_cloud.py secrets --project zona-12ab3

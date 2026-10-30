@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -29,13 +30,17 @@ sys.path.insert(0, str(ROOT))
 from zona.config import MIN_PASSWORD_LEN, PLACEHOLDERS  # noqa: E402
 from zona.push import generate_vapid_keys  # noqa: E402
 
-REGION = "us-central1"  # in Cloud Run's free tier, and next to Firestore's nam5
+REGION = "us-central1"  # in Cloud Run's free tier, and where (or next to where) Firestore lives
 SERVICE, SECRET, JOB, ART_REPO = "zona", "zona-env", "zona-tick", "cloud-run-source-deploy"
 SCHEDULE = "*/5 * * * *"
 APIS = ("run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com",
-        "cloudscheduler.googleapis.com", "secretmanager.googleapis.com", "firestore.googleapis.com")
-RUNTIME_ROLES = ("roles/datastore.user", "roles/run.builder")  # Firestore access, and building the image from source
+        "cloudscheduler.googleapis.com", "secretmanager.googleapis.com", "firestore.googleapis.com", "iam.googleapis.com")
+# Zona's server runs as its own account, which can use Firestore and read its one secret and nothing else.
+# The default compute account, which Google makes a project Editor, only builds the image from source.
+RUN_ACCOUNT = "zona-run"
+RUN_ROLE, BUILD_ROLE = "roles/datastore.user", "roles/run.builder"
 ASKABLE = ("GARMIN_PERSONAL_API_KEY", "ZONA_PASSWORD", "ZONA_VAPID_SUBJECT")
+BIND_TRIES, BIND_WAIT_S = 4, 5  # a brand-new service account takes a few seconds to be usable in IAM policies
 
 
 class Step(RuntimeError):
@@ -78,9 +83,23 @@ def quiet_ok(*args: str, project: str) -> bool:
     return gcloud(*args, project=project, capture=True, check=False).returncode == 0
 
 
-def runtime_account(project: str) -> str:
+def run_account(project: str) -> str:
+    return f"{RUN_ACCOUNT}@{project}.iam.gserviceaccount.com"
+
+
+def build_account(project: str) -> str:
     number = gcloud_json("projects", "describe", project, project=project)["projectNumber"]
     return f"{number}-compute@developer.gserviceaccount.com"
+
+
+def bind(*args: str, project: str) -> None:
+    """An add-iam-policy-binding, retried while a just-created service account propagates."""
+    for attempt in range(1, BIND_TRIES + 1):
+        done = gcloud(*args, "--format=none", project=project, check=attempt == BIND_TRIES, capture=attempt < BIND_TRIES)
+        if done.returncode == 0:
+            return
+        print(f"  not ready yet, retrying in {BIND_WAIT_S}s")
+        time.sleep(BIND_WAIT_S)
 
 
 # ---------- setup ----------
@@ -89,10 +108,12 @@ def setup(project: str) -> None:
     if not quiet_ok("firestore", "databases", "describe", project=project):  # the (default) database
         print("\nNo Firestore database yet; creating it in nam5 (United States).")
         gcloud("firestore", "databases", "create", "--location=nam5", project=project)
-    account = runtime_account(project)
-    for role in RUNTIME_ROLES:
-        gcloud("projects", "add-iam-policy-binding", project, f"--member=serviceAccount:{account}", f"--role={role}",
-               "--condition=None", "--quiet", "--format=none", project=project)
+    if not quiet_ok("iam", "service-accounts", "describe", run_account(project), project=project):
+        gcloud("iam", "service-accounts", "create", RUN_ACCOUNT, "--display-name=zona-server", project=project)
+    bind("projects", "add-iam-policy-binding", project, f"--member=serviceAccount:{run_account(project)}",
+         f"--role={RUN_ROLE}", "--condition=None", "--quiet", project=project)
+    bind("projects", "add-iam-policy-binding", project, f"--member=serviceAccount:{build_account(project)}",
+         f"--role={BUILD_ROLE}", "--condition=None", "--quiet", project=project)
     print("\nOK: setup done. Next: secrets.")
 
 
@@ -157,8 +178,8 @@ def secrets(project: str, only: str | None) -> None:
     listed = [v["name"] for v in gcloud_json("secrets", "versions", "list", SECRET, "--filter=state:ENABLED", project=project)]
     for old in sorted((v.rsplit("/", 1)[-1] for v in listed), key=int)[:-1]:
         gcloud("secrets", "versions", "destroy", old, f"--secret={SECRET}", "--quiet", project=project, capture=True)
-    gcloud("secrets", "add-iam-policy-binding", SECRET, f"--member=serviceAccount:{runtime_account(project)}",
-           "--role=roles/secretmanager.secretAccessor", "--format=none", project=project)
+    bind("secrets", "add-iam-policy-binding", SECRET, f"--member=serviceAccount:{run_account(project)}",
+         "--role=roles/secretmanager.secretAccessor", project=project)
     if generated_password:
         print(f"\nYour app password is: {bundle['ZONA_PASSWORD']}\nSave it in your password manager now; it isn't shown again.")
     print("\nOK: secrets stored." + (" Run `deploy` so the server picks up the change." if only else " Next: deploy."))
@@ -179,6 +200,7 @@ def deploy(project: str, extra_origins: list[str]) -> None:
         env_file = fh.name
     try:
         gcloud("run", "deploy", SERVICE, "--source=.", f"--region={REGION}", "--allow-unauthenticated",
+               f"--service-account={run_account(project)}",
                "--max-instances=1", "--min-instances=0", "--memory=512Mi", "--cpu=1", "--concurrency=20", "--timeout=300",
                f"--set-secrets=ZONA_SECRETS={SECRET}:latest", f"--env-vars-file={env_file}", "--quiet", project=project)
     finally:
