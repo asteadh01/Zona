@@ -202,7 +202,7 @@ The build runs in Expo's cloud and takes about 15 minutes. It ends with a link a
 
 ## Updating the app
 
-**Over the air, for screens, text, logic and images.** In `mobile`:
+**Over the air, for screens, text, logic and images.** If the server changed too, deploy it and wait for it to finish first. In `mobile`:
 
 ```bash
 npx --yes eas-cli update --channel phone --platform ios --message "what changed" --environment production
@@ -236,5 +236,6 @@ To undo a bad update, run `npx --yes eas-cli update:roll-back-to-embedded --chan
 | "Sync failed" on Home | Garmin didn't answer. The next 5-minute tick retries, or tap **Sync now** at the top right of Home |
 | No notification arrives | iPhone Settings › Notifications › Zona, Focus modes, and in Zona, Train › Zona › devices registered |
 | `gcloud` or `firebase` says permission denied | You're signed in as a different Google account. Run `gcloud auth login` or `npx.cmd --yes firebase-tools@15 login` again |
+| The app closes right after opening, or shows "Something went wrong" | A new app update is expecting a newer server, or the update itself is bad. Run `deploy` first. If that doesn't help, roll the update back (see "Updating the app") |
 | "Zona is up to date" right after publishing | The update's `version` doesn't match the installed build, or that build predates updates. Compare with **Train › Zona**, and build again if needed |
 | A Firebase budget email arrives | Tell me what it says. Something is outside the free allowances |

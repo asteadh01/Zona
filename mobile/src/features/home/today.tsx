@@ -116,7 +116,7 @@ function ZoneBar({ zones }: { zones: number[] }) {
 
 function Sessions({ home }: { home: Home }) {
   const local = useLocal();
-  const { today, yesterday, later, maybe } = home.sessions;
+  const { today, yesterday, later, maybe = [] } = home.sessions; // a server deployed before an app update has no maybe
   const newest = today[0] ?? yesterday[0];
   const [picked, setPicked] = useState<string | null | undefined>(undefined); // undefined: the newest stays open
   const open = picked === undefined ? newest?.id : picked;
@@ -209,7 +209,7 @@ export function TodayView({ home, onChanged }: { home: Home; onChanged: () => vo
   return (
     <>
       <NudgeCard nudge={home.water.latest_nudge} logs={home.water.logs} onLogged={onChanged} />
-      <CallCard call={home.call} next={home.next} maybe={home.sessions.maybe[0]} />
+      <CallCard call={home.call} next={home.next} maybe={home.sessions.maybe?.[0]} />
       <Tiles day={home.day} home={home} />
       <Sessions home={home} />
       <WeekCard home={home} />

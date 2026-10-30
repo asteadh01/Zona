@@ -37,7 +37,7 @@ export type Settings = {
 
 export type Home = {
   now: string; date: string; now_h: number; sync: SyncStatus; call: Call | null; next: PlannedSession | null; day: Day | null;
-  intensity_week: number; sessions: { today: Activity[]; yesterday: Activity[]; later: PlannedSession[]; maybe: MaybeSession[] };
+  intensity_week: number; sessions: { today: Activity[]; yesterday: Activity[]; later: PlannedSession[]; maybe?: MaybeSession[] };
   week: { date: string; active_kcal: number | null; future: boolean }[]; water: Water; settings: Settings;
 };
 

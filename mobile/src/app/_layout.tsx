@@ -12,6 +12,8 @@ import { useAuthStore } from '@/store/auth-store';
 void SplashScreen.preventAutoHideAsync();
 void configureNotifications().catch(() => undefined); // only the buttons on a notification are lost, and it retries next launch
 
+export { AppError as ErrorBoundary } from '@/components/app-error';
+
 export default function RootLayout() {
   const token = useAuthStore((state) => state.token);
   const ready = useAuthStore((state) => state.ready);
